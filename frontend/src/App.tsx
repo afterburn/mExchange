@@ -249,7 +249,7 @@ function App() {
         }
       }
     }
-  }, [user, placeOrder, nextOrderId, fetchBalances, stats.bestAsk]);
+  }, [user, placeOrder, nextOrderId, fetchBalances, fetchOrders, stats.bestAsk]);
 
   const handleCancelOrder = useCallback(async (orderId: number | string) => {
     // Check if it's an API order (UUID string) or local order (number)
@@ -266,7 +266,7 @@ function App() {
       cancelOrder(orderId);
       setOpenOrders(prev => prev.filter(o => o.id !== orderId));
     }
-  }, [cancelOrder, fetchBalances]);
+  }, [cancelOrder, fetchBalances, fetchOrders]);
 
   // Convert API orders to display format for OpenOrders component
   const displayOrders = useMemo((): Order[] => {
