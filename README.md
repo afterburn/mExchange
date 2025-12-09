@@ -19,7 +19,7 @@ The exchange is functional with the following components:
 | **matching_engine_service** | Service | Complete | REST/UDP wrapper for matching engine |
 | **gateway** | Service | Complete | Client-facing WebSocket/REST API |
 | **accounts** | Service | Complete | User auth, balances, settlement |
-| **market_data** | Service | Partial | OHLCV aggregation (Kafka-dependent) |
+| **market_data** | Service | Complete | OHLCV aggregation from gateway events |
 | **trading_bot** | Service | Complete | Automated market making strategies |
 | **frontend** | App | Complete | React trading interface |
 
@@ -55,16 +55,22 @@ See `.github/workflows/deploy.yml` for EC2 deployment via GitHub Actions.
    ┌──────────────┐                                │ (orders, fills, events)
    │   Gateway    │◄───────────────────────────────┘
    │    Axum      │
-   │  Port 3000   │────────────────┐
-   └──────────────┘                │
-          │                        │ HTTP (settlement, auth)
-          │ HTTP                   │
-          ▼                        ▼
-   ┌──────────────┐         ┌──────────────┐
-   │   Accounts   │◄───────►│  PostgreSQL  │
-   │   Service    │         │              │
-   │  Port 3001   │         └──────────────┘
-   └──────────────┘
+   │  Port 3000   │────────────────┬───────────────┐
+   └──────────────┘                │               │
+          │                        │               │ WebSocket (trades)
+          │ HTTP (auth, balances)  │               ▼
+          ▼                        │        ┌──────────────┐
+   ┌──────────────┐                │        │  Market Data │
+   │   Accounts   │◄───────────────┼───────►│   Service    │
+   │   Service    │  HTTP          │        │  Port 3002   │
+   │  Port 3001   │  (settlement)  │        └──────────────┘
+   └──────────────┘                │               │
+          │                        │               │
+          ▼                        ▼               ▼
+   ┌────────────────────────────────────────────────────┐
+   │                    PostgreSQL                       │
+   │   (users, balances, orders, trades, ohlcv)         │
+   └────────────────────────────────────────────────────┘
 ```
 
 ### Why UDP + FlatBuffers?
@@ -98,7 +104,7 @@ The current architecture has several limitations that would need to be addressed
 
 1. **Single matching engine instance** - The matching engine runs as a single process. While it handles 5M+ orders/sec, horizontal scaling would require order routing/sharding by symbol.
 
-2. **No message queue** - Services communicate directly. Adding Kafka/NATS would provide durability, replay capability, and better decoupling.
+2. **No event replay** - UDP is fire-and-forget. A persistent event log would enable replay for recovery and debugging.
 
 3. **Coupled settlement** - Settlement happens synchronously in the accounts service. A dedicated settlement service with its own transaction log would be more robust.
 
@@ -112,9 +118,11 @@ The current architecture has several limitations that would need to be addressed
 
 - **matching_engine_service/** - Wraps the library, exposes REST API, communicates with gateway via UDP for low-latency order/event transport.
 
-- **gateway/** - Client-facing server (port 3000). WebSocket for real-time orderbook/trades, REST for order placement. Proxies to accounts service.
+- **gateway/** - Client-facing server (port 3000). WebSocket for real-time orderbook/trades, REST for order placement. Proxies to accounts and market_data services.
 
-- **accounts/** - User management, authentication (OTP-based), balance tracking, trade settlement, OHLCV aggregation.
+- **accounts/** - User management, authentication (OTP-based), balance tracking, trade settlement.
+
+- **market_data/** - OHLCV candlestick aggregation. Subscribes to gateway WebSocket for trade events, stores candles in PostgreSQL, exposes REST API for historical data.
 
 - **frontend/** - React + TypeScript + Tailwind. Real-time orderbook, candlestick charts, order entry.
 
@@ -123,10 +131,12 @@ The current architecture has several limitations that would need to be addressed
 ### API Endpoints
 
 Gateway (port 3000):
-- `WS /ws` - Real-time market data
+- `WS /ws` - Real-time market data (orderbook, trades)
 - `POST /api/order` - Place order
-- `GET /api/ohlcv` - OHLCV candle data
-- `POST /auth/*` - Authentication
+- `GET /api/ohlcv` - OHLCV candle data (proxied to market_data)
+- `POST /auth/*` - Authentication (proxied to accounts)
+- `GET /api/balances` - User balances (proxied to accounts)
+- `GET /api/orders` - User orders (proxied to accounts)
 
 ## Development
 
@@ -144,6 +154,7 @@ Gateway (port 3000):
 cargo build --release --manifest-path gateway/Cargo.toml
 cargo build --release --manifest-path matching_engine_service/Cargo.toml
 cargo build --release --manifest-path accounts/Cargo.toml
+cargo build --release --manifest-path market_data/Cargo.toml
 
 # Frontend
 cd frontend && npm install && npm run build
@@ -188,7 +199,6 @@ The intended architecture includes additional components not yet fully implement
 - **risk_engine** - Pre-trade risk validation, margin checks, position limits
 - **settlement** - Dedicated post-trade settlement service with transaction log
 - **admin** - Administrative dashboard and controls
-- **Kafka/NATS** - Event streaming between services for durability and replay
 - **Redis** - Caching layer for orderbook snapshots and session data
 
 ## Design Philosophy

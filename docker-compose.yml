@@ -60,6 +60,7 @@ services:
       ORDER_SENDER_BIND: 0.0.0.0:9102
       EVENT_RECEIVER_BIND: 0.0.0.0:9101
       ACCOUNTS_URL: http://accounts:3001
+      MARKET_DATA_URL: http://market-data:3002
       BIND_ADDR: 0.0.0.0:3000
     ports:
       - "3000:3000"

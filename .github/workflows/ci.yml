@@ -41,6 +41,21 @@ jobs:
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: accounts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,6 +78,8 @@ jobs:
 
       - name: Run accounts tests
         if: ${{ needs.changes.outputs.accounts == 'true' }}
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/accounts_test
         run: cargo test --manifest-path accounts/Cargo.toml
 
       - name: Check gateway builds

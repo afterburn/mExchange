@@ -10,13 +10,15 @@ use reqwest::Client;
 pub struct ProxyState {
     pub client: Client,
     pub accounts_url: String,
+    pub market_data_url: String,
 }
 
 impl ProxyState {
-    pub fn new(accounts_url: String) -> Self {
+    pub fn new(accounts_url: String, market_data_url: String) -> Self {
         Self {
             client: Client::new(),
             accounts_url,
+            market_data_url,
         }
     }
 }
@@ -25,9 +27,24 @@ pub async fn proxy_accounts(
     State(proxy): State<ProxyState>,
     req: Request,
 ) -> Result<Response, StatusCode> {
+    proxy_to_url(&proxy.client, &proxy.accounts_url, req).await
+}
+
+pub async fn proxy_market_data(
+    State(proxy): State<ProxyState>,
+    req: Request,
+) -> Result<Response, StatusCode> {
+    proxy_to_url(&proxy.client, &proxy.market_data_url, req).await
+}
+
+async fn proxy_to_url(
+    client: &Client,
+    base_url: &str,
+    req: Request,
+) -> Result<Response, StatusCode> {
     let path = req.uri().path();
     let query = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
-    let target_url = format!("{}{}{}", proxy.accounts_url, path, query);
+    let target_url = format!("{}{}{}", base_url, path, query);
 
     tracing::debug!("Proxying request to: {}", target_url);
 
@@ -35,7 +52,7 @@ pub async fn proxy_accounts(
     let headers = req.headers().clone();
 
     // Build the proxied request
-    let mut proxy_req = proxy.client.request(method.clone(), &target_url);
+    let mut proxy_req = client.request(method.clone(), &target_url);
 
     // Forward relevant headers
     for (name, value) in headers.iter() {

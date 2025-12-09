@@ -185,6 +185,7 @@ jobs:
           Environment=ORDER_SENDER_BIND=0.0.0.0:9102
           Environment=EVENT_RECEIVER_BIND=0.0.0.0:9101
           Environment=ACCOUNTS_URL=http://127.0.0.1:3001
+          Environment=MARKET_DATA_URL=http://127.0.0.1:3002
           ExecStart=/opt/mexchange/bin/gateway
           Restart=always
           RestartSec=5

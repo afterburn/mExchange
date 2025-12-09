@@ -38,14 +38,41 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
   const seriesRef = useRef<unknown>(null);
   const candlesRef = useRef<Map<number, Candle>>(new Map());
   const lastProcessedTradeRef = useRef<number>(0);
+  const chartTypeRef = useRef<'candles' | 'line'>('candles');
 
   const [timeframe, setTimeframe] = useState<Timeframe>('1m');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
   const [isReady, setIsReady] = useState(false);
   const [hasCandles, setHasCandles] = useState(false);
 
-  // Define helper functions first using useCallback
-  const createSeries = useCallback(() => {
+  // Keep ref in sync with state
+  useEffect(() => {
+    chartTypeRef.current = chartType;
+  }, [chartType]);
+
+  // Update chart with current candles - no dependencies on chartType
+  const updateChart = useCallback(() => {
+    const chart = chartRef.current as ReturnType<typeof window.LightweightCharts.createChart> | null;
+    const series = seriesRef.current as ReturnType<ReturnType<typeof window.LightweightCharts.createChart>['addSeries']> | null;
+    if (!chart || !series) return;
+
+    const candles = Array.from(candlesRef.current.values()).sort((a, b) => a.time - b.time);
+
+    if (chartTypeRef.current === 'candles') {
+      series.setData(candles);
+    } else {
+      series.setData(candles.map(c => ({ time: c.time, value: c.close })));
+    }
+
+    setHasCandles(candles.length > 0);
+
+    if (candles.length > 0) {
+      chart.timeScale().scrollToRealTime();
+    }
+  }, []);
+
+  // Create series based on current chart type
+  const createSeries = useCallback((type: 'candles' | 'line') => {
     const chart = chartRef.current as ReturnType<typeof window.LightweightCharts.createChart> | null;
     if (!chart) return;
 
@@ -55,7 +82,7 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
       chart.removeSeries(seriesRef.current as Parameters<typeof chart.removeSeries>[0]);
     }
 
-    if (chartType === 'candles') {
+    if (type === 'candles') {
       seriesRef.current = chart.addSeries(LWC.CandlestickSeries, {
         upColor: '#22c55e',
         downColor: '#ef4444',
@@ -70,27 +97,7 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
         lineWidth: 2,
       });
     }
-  }, [chartType]);
-
-  const updateChart = useCallback(() => {
-    const chart = chartRef.current as ReturnType<typeof window.LightweightCharts.createChart> | null;
-    const series = seriesRef.current as ReturnType<ReturnType<typeof window.LightweightCharts.createChart>['addSeries']> | null;
-    if (!chart || !series) return;
-
-    const candles = Array.from(candlesRef.current.values()).sort((a, b) => a.time - b.time);
-
-    if (chartType === 'candles') {
-      series.setData(candles);
-    } else {
-      series.setData(candles.map(c => ({ time: c.time, value: c.close })));
-    }
-
-    setHasCandles(candles.length > 0);
-
-    if (candles.length > 0) {
-      chart.timeScale().scrollToRealTime();
-    }
-  }, [chartType]);
+  }, []);
 
   // Wait for LightweightCharts library
   useEffect(() => {
@@ -141,8 +148,8 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
 
     chartRef.current = chart;
 
-    // Create initial series
-    createSeries();
+    // Create initial series with current chart type
+    createSeries(chartTypeRef.current);
 
     const resizeObserver = new ResizeObserver(() => {
       chart.applyOptions({
@@ -163,15 +170,21 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
   // Recreate series when chart type changes
   useEffect(() => {
     if (!chartRef.current || !isReady) return;
-    createSeries();
+    createSeries(chartType);
     updateChart();
   }, [chartType, isReady, createSeries, updateChart]);
 
   // Fetch initial OHLCV data when timeframe changes
   useEffect(() => {
     let cancelled = false;
+
+    // Clear candles when timeframe changes and update chart to show empty state
     candlesRef.current.clear();
     lastProcessedTradeRef.current = 0;
+    // Update chart to reflect cleared state (will set hasCandles to false)
+    if (chartRef.current && seriesRef.current) {
+      updateChart();
+    }
 
     async function fetchData() {
       try {
@@ -195,7 +208,10 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
           });
         }
 
-        updateChart();
+        // Only update chart if chart is ready
+        if (chartRef.current && seriesRef.current) {
+          updateChart();
+        }
       } catch (err) {
         console.error('Failed to fetch OHLCV:', err);
       }
@@ -243,7 +259,7 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
       );
     }
 
-    if (updated) {
+    if (updated && chartRef.current && seriesRef.current) {
       updateChart();
     }
   }, [trades, timeframe, updateChart]);

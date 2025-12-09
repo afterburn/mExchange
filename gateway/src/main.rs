@@ -42,6 +42,7 @@ async fn tokio_main() -> anyhow::Result<()> {
     tracing::info!("Starting gateway service with UDP transport...");
 
     let accounts_url = std::env::var("ACCOUNTS_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let market_data_url = std::env::var("MARKET_DATA_URL").unwrap_or_else(|_| "http://localhost:3002".to_string());
     let bind_addr: SocketAddr = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
         .parse()?;
@@ -53,6 +54,7 @@ async fn tokio_main() -> anyhow::Result<()> {
         udp_config.event_receiver_bind);
 
     tracing::info!("Proxying accounts requests to: {}", accounts_url);
+    tracing::info!("Proxying market data requests to: {}", market_data_url);
 
     // Create UDP order sender
     let order_sender = match UdpOrderSender::new(
@@ -69,7 +71,7 @@ async fn tokio_main() -> anyhow::Result<()> {
         }
     };
 
-    let server = GatewayServer::new(order_sender, accounts_url);
+    let server = GatewayServer::new(order_sender, accounts_url, market_data_url);
 
     server.start_event_broadcaster().await;
 

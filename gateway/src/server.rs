@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::channel_updates::OrderBookState;
 use crate::events::{CancelOrderRequest, MarketEvent, OrderCommand, OrderRequest, Side};
 use crate::udp_transport::{UdpOrderSender, UdpEventReceiver};
-use crate::proxy::{proxy_accounts, ProxyState};
+use crate::proxy::{proxy_accounts, proxy_market_data, ProxyState};
 use crate::state::GatewayState;
 use crate::websocket::{BotCommand, BotCommandInner, ChannelManager};
 use std::collections::HashMap;
@@ -43,13 +43,13 @@ type AppState = (
 );
 
 impl GatewayServer {
-    pub fn new(order_sender: Arc<UdpOrderSender>, accounts_url: String) -> Self {
+    pub fn new(order_sender: Arc<UdpOrderSender>, accounts_url: String, market_data_url: String) -> Self {
         Self {
             state: GatewayState::new(),
             order_sender,
             channel_manager: Arc::new(tokio::sync::RwLock::new(ChannelManager::new())),
             orderbook_states: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            proxy_state: ProxyState::new(accounts_url),
+            proxy_state: ProxyState::new(accounts_url, market_data_url),
         }
     }
 
@@ -124,7 +124,7 @@ impl GatewayServer {
         };
 
         // Proxy router for accounts service endpoints
-        let proxy_router = Router::new()
+        let accounts_proxy_router = Router::new()
             .route("/auth/*path", any(proxy_accounts))
             .route("/api/me", any(proxy_accounts))
             .route("/api/me/*path", any(proxy_accounts))
@@ -133,8 +133,12 @@ impl GatewayServer {
             .route("/api/orders", any(proxy_accounts))
             .route("/api/orders/*path", any(proxy_accounts))
             .route("/api/faucet/*path", any(proxy_accounts))
-            .route("/api/ohlcv", any(proxy_accounts))
-            .route("/api/ohlcv/*path", any(proxy_accounts))
+            .with_state(self.proxy_state.clone());
+
+        // Proxy router for market_data service endpoints
+        let market_data_proxy_router = Router::new()
+            .route("/api/ohlcv", any(proxy_market_data))
+            .route("/api/ohlcv/*path", any(proxy_market_data))
             .with_state(self.proxy_state.clone());
 
         Router::new()
@@ -145,7 +149,8 @@ impl GatewayServer {
             .route("/api/bot/start", post(start_bot))
             .route("/api/bot/stop", post(stop_bot))
             .route("/api/bot/status", get(bot_status))
-            .merge(proxy_router)
+            .merge(accounts_proxy_router)
+            .merge(market_data_proxy_router)
             .layer(cors)
             .with_state((
                 self.state.clone(),

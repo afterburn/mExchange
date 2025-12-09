@@ -13,7 +13,7 @@ use axum::{
 use serde::Serialize;
 use std::env;
 use axum::http::HeaderValue;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 use accounts::AppState;
 use models::{User, token::TokenService};

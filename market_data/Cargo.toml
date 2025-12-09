@@ -6,16 +6,18 @@ authors = ["Kevin Karsopawiro <kevin@kevin.rs>"]
 license = "MIT"
 
 [dependencies]
-# Kafka consumer
-rdkafka = { version = "0.36", features = ["cmake-build"] }
+# WebSocket client
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
+url = "2"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "rust_decimal"] }
 
-# HTTP server (for health check)
+# HTTP server
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
