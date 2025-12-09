@@ -84,6 +84,9 @@ jobs:
 
       - name: Deploy to EC2
         run: |
+          # Stop services before deploying
+          ssh ec2 "sudo systemctl stop mexchange-gateway mexchange-matching-engine mexchange-accounts mexchange-market-data 2>/dev/null || true"
+
           # Create directories on EC2
           ssh ec2 "sudo mkdir -p ${{ env.DEPLOY_PATH }}/{bin,frontend} && sudo chown -R \$USER:\$USER ${{ env.DEPLOY_PATH }}"
 
