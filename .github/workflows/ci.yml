@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            gateway
+            matching_engine_service
+            accounts
+            matching_engine
+
+      - name: Run matching_engine tests
+        run: cargo test --manifest-path matching_engine/Cargo.toml
+
+      - name: Run accounts tests
+        run: cargo test --manifest-path accounts/Cargo.toml
+
+      - name: Check gateway builds
+        run: cargo check --manifest-path gateway/Cargo.toml
+
+      - name: Check matching_engine_service builds
+        run: cargo check --manifest-path matching_engine_service/Cargo.toml
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: Lint
+        run: cd frontend && npm run lint
+
+      - name: Type check
+        run: cd frontend && npx tsc --noEmit
+
+      - name: Build
+        run: cd frontend && npm run build
