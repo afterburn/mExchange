@@ -5,8 +5,8 @@ import { useWebSocket, type OrderEvent } from './useWebSocket';
 // Re-export OrderEvent for consumers
 export type { OrderEvent } from './useWebSocket';
 
-const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL || 'ws://localhost:3000/ws';
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || 'ws://localhost:3000/ws').trim();
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3000').trim();
 
 // Throttle UI updates to 60fps max (16ms)
 const UI_UPDATE_INTERVAL = 16;

@@ -11,8 +11,8 @@ import {
   type PricePoint,
 } from '../utils/hftOptimizations';
 
-const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL || 'ws://localhost:3000/ws';
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL || 'ws://localhost:3000/ws').trim();
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3000').trim();
 
 // Throttle UI updates to 60fps max (16ms) - prevents excessive re-renders
 const UI_UPDATE_INTERVAL = 16;

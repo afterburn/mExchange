@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import type { Trade } from '../types';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3000').trim();
 
 interface Candle {
   time: number;
@@ -52,7 +52,7 @@ const PriceChart = memo(function PriceChart({ trades }: PriceChartProps) {
     async function fetchData() {
       try {
         const res = await fetch(
-          `${API_URL}/api/ohlcv?symbol=KCN/EUR&interval=${timeframe}&limit=500`
+          `${API_URL}/api/ohlcv?symbol=${encodeURIComponent('KCN/EUR')}&interval=${timeframe}&limit=500`
         );
         if (!res.ok || cancelled) return;
 
