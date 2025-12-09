@@ -72,6 +72,49 @@ impl OHLCV {
         .await
     }
 
+    /// Update OHLCV bars for all intervals when a trade occurs
+    pub async fn update_from_trade(
+        pool: &PgPool,
+        symbol: &str,
+        price: Decimal,
+        quantity: Decimal,
+        timestamp_ms: i64,
+    ) -> Result<(), sqlx::Error> {
+        use chrono::TimeZone;
+
+        let timestamp = Utc.timestamp_millis_opt(timestamp_ms).unwrap();
+
+        // Update 1m, 5m, 15m, 1h candles
+        let intervals = [
+            ("1m", 60),
+            ("5m", 300),
+            ("15m", 900),
+            ("1h", 3600),
+        ];
+
+        for (interval, seconds) in intervals {
+            let open_time = Utc.timestamp_opt(
+                (timestamp.timestamp() / seconds) * seconds,
+                0
+            ).unwrap();
+
+            Self::upsert(
+                pool,
+                symbol,
+                interval,
+                open_time,
+                price,    // open (only used on insert)
+                price,    // high
+                price,    // low
+                price,    // close
+                quantity, // volume
+                1,        // trade_count
+            ).await?;
+        }
+
+        Ok(())
+    }
+
     /// Get 24h statistics for a symbol
     pub async fn get_24h_stats(
         pool: &PgPool,

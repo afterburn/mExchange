@@ -1,155 +1,125 @@
 # mExchange
 
-A modular, high-performance cryptocurrency exchange platform built with Rust. mExchange is designed as a collection of independent services and libraries that work together to create a complete trading system.
+A modular, high-performance cryptocurrency exchange platform built with Rust.
 
-## Overview
+> **Work in Progress**: This project is under active development. The current implementation works but the architecture is evolving toward the target design described below.
 
-mExchange is a full exchange architecture where each component handles a specific responsibility. This repository currently contains the foundation - a high-performance matching engine library.
+![mExchange Trading Interface](docs/screenshot.png)
 
-The matching engine is complete. Future components will include risk management, settlement, market data distribution, and administration services.
+## Current Status
 
-## Architecture Philosophy
+The exchange is functional with the following components:
 
-Microservices-inspired design where each component is an independent Rust crate:
-- Independent scaling and deployment
-- Fault isolation
-- Technology flexibility
-- Clear boundaries
+| Component | Status | Description |
+|-----------|--------|-------------|
+| **matching_engine** | Complete | High-performance order matching library |
+| **matching_engine_service** | Complete | REST/UDP wrapper for matching engine |
+| **gateway** | Complete | Client-facing WebSocket/REST API |
+| **accounts** | Complete | User auth, balances, settlement |
+| **frontend** | Complete | React trading interface |
+| **trading_bot** | Complete | Automated market making strategies |
+| **market_data** | Partial | OHLCV aggregation (Kafka-dependent) |
 
-## Components
+## Quick Start
 
-### matching_engine (Complete)
+### Local Development (Docker)
 
-High-performance matching engine library. Price-time priority matching with support for limit and market orders. Partial fills across multiple price levels. Pure matching engine with no validation, networking, or storage.
+```bash
+docker-compose up --build
+```
 
-Performance: 5.2M orders/sec throughput, comparable to tier-1 exchanges.
+Access the frontend at `http://localhost:5173`
 
-[See matching_engine/README.md for complete documentation](matching_engine/README.md)
+### Production Deployment
 
-### gateway (Planned)
+See `.github/workflows/deploy.yml` for EC2 deployment via GitHub Actions.
 
-Client-facing API server. Provides WebSocket and REST interfaces for traders, handles authentication integration and rate limiting.
+## Architecture
 
-### risk_engine (Planned)
+```
+Frontend (React) --> Gateway (Axum) <--UDP--> Matching Engine Service
+                         |                         |
+                         v                         v
+                    Accounts Service ---------> PostgreSQL
+```
 
-Pre-trade risk management service. Validates orders against balance limits, position limits, and circuit breakers before routing to matching engine.
+### Custom UDP Protocol
 
-### settlement (Planned)
+Inter-service communication between the gateway and matching engine uses a custom FlatBuffers-based UDP protocol (`udp_proto/`) for minimal latency. This avoids HTTP overhead for the critical order/event path while maintaining type safety.
 
-Post-trade settlement and balance management. Updates account balances, handles deposits/withdrawals, maintains ledger.
+### Component Responsibilities
 
-### market_data (Planned)
+- **matching_engine/** - Pure Rust library for order matching. Price-time priority with BTreeMap for price levels. 5.2M orders/sec throughput.
 
-Market data distribution service. Provides real-time orderbook depth snapshots, trade history, OHLCV aggregation, and historical data APIs.
+- **matching_engine_service/** - Wraps the library, exposes REST API, communicates with gateway via UDP for low-latency order/event transport.
 
-### auth (Planned)
+- **gateway/** - Client-facing server (port 3000). WebSocket for real-time orderbook/trades, REST for order placement. Proxies to accounts service.
 
-Authentication and authorization service. Manages user authentication, API keys, sessions, and permissions.
+- **accounts/** - User management, authentication (OTP-based), balance tracking, trade settlement, OHLCV aggregation.
 
-### admin (Planned)
+- **frontend/** - React + TypeScript + Tailwind. Real-time orderbook, candlestick charts, order entry.
 
-Administrative interface and monitoring. Provides trading controls, user management, system monitoring, and performance metrics.
+- **trading_bot/** - Automated trading strategies (MarketMaker, Aggressive, Random) for liquidity generation.
 
-## Design Philosophy
+### API Endpoints
 
-### Separation of Concerns
+Gateway (port 3000):
+- `WS /ws` - Real-time market data
+- `POST /api/order` - Place order
+- `GET /api/ohlcv` - OHLCV candle data
+- `POST /auth/*` - Authentication
 
-Each component has a single, well-defined responsibility. The matching engine handles order matching, risk engine handles validation, gateway handles client connections. This separation enables independent scaling, testing, and deployment.
-
-### Performance First
-
-Built for high-throughput, low-latency trading. Critical paths are optimized for minimal allocations and maximum efficiency. Rust's zero-cost abstractions and ownership system ensure memory safety without runtime overhead.
-
-### Code Standards
-
-- Comprehensive test coverage
-- Clean, idiomatic Rust
-- Minimal comments (explain why not what)
-- Benchmark-driven optimization
-
-## Getting Started
+## Development
 
 ### Prerequisites
 
 - Rust 1.70+ (edition 2021)
-- Cargo
+- Node.js 20+
+- PostgreSQL 16+
+- Docker (optional)
 
 ### Building
 
 ```bash
-cd matching_engine
-cargo build --release
+# Rust services
+cargo build --release --manifest-path gateway/Cargo.toml
+cargo build --release --manifest-path matching_engine_service/Cargo.toml
+cargo build --release --manifest-path accounts/Cargo.toml
+
+# Frontend
+cd frontend && npm install && npm run build
 ```
 
 ### Running Tests
 
 ```bash
-cd matching_engine
-cargo test
+cargo test --manifest-path matching_engine/Cargo.toml
+cargo test --manifest-path accounts/Cargo.toml
 ```
 
-### Running Benchmarks
+## Target Architecture (WIP)
 
-```bash
-cd matching_engine
-cargo bench
-```
+The intended architecture includes additional components not yet fully implemented:
 
-### Examples
+- **risk_engine** - Pre-trade risk validation
+- **settlement** - Dedicated post-trade settlement service
+- **admin** - Administrative dashboard and controls
+- **Kafka** - Event streaming between services
 
-```bash
-cd matching_engine
-cargo run --example building_orderbook
-cargo run --example market_orders
-cargo run --example crossing_spread
-cargo run --example partial_fills
-cargo run --example order_cancellation
-```
+## Design Philosophy
 
-## Using the Matching Engine
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-matching_engine = { path = "../matching_engine" }
-rust_decimal = "1.35"
-```
-
-### API
-
-- `add_limit_order(side, price, quantity) -> OrderResult`
-- `add_market_order(side, quantity) -> OrderResult`
-- `cancel_order(order_id) -> bool`
-- `best_bid() -> Option<Price>`
-- `best_ask() -> Option<Price>`
-- `spread() -> Option<Price>`
-- `quantity_at_price(side, price) -> Quantity`
-
-## Architecture Decisions
-
-### Why Separate Binaries?
-
-1. **Scalability** - Scale matching engine independently from gateway
-2. **Fault isolation** - Gateway crash doesn't affect matching
-3. **Deployment flexibility** - Update components without full system restart
-4. **Technology choice** - Can rewrite components in different languages if needed
-
-### Why Rust
-
-- Zero-cost abstractions, no garbage collection
-- Memory safety without runtime overhead
-- Fearless concurrency with ownership system
-- Excellent ecosystem for async/networking/cryptography
+- **Separation of Concerns** - Each component has a single responsibility
+- **Performance First** - Critical paths optimized for minimal allocations
+- **Rust** - Zero-cost abstractions, memory safety, fearless concurrency
 
 ## Contributing
 
 Contributions are welcome! Please:
 - Ensure all tests pass
 - Add tests for new functionality
-- Follow the code style guidelines
+- Follow the existing code style
 - Run benchmarks to check for performance regressions
-- Update documentation
+- Update documentation as needed
 
 ## License
 
