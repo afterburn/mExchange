@@ -42,6 +42,9 @@ jobs:
           cp market_data/target/release/market_data dist/bin/
 
       - name: Build frontend
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_GATEWAY_URL: ${{ vars.VITE_GATEWAY_URL }}
         run: |
           cd frontend
           npm ci
