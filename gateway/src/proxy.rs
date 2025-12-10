@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
-    extract::{Path, Request, State},
+    extract::{Request, State},
     http::{header, Method, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use reqwest::Client;
 

@@ -77,11 +77,14 @@ impl OrderBookState {
                 let mut new_asks = BTreeMap::new();
 
                 for level in bids {
+                    tracing::info!("Snapshot bid: price={}, quantity={}", level.price, level.quantity);
                     let old_qty = self
                         .bids
                         .get(&level.price)
                         .copied()
                         .unwrap_or(Decimal::ZERO);
+                    tracing::info!("  old_qty={}, comparison: {} != {} = {}",
+                        old_qty, old_qty, level.quantity, old_qty != level.quantity);
                     if old_qty != level.quantity {
                         bid_changes.push(PriceLevelChange {
                             price: level.price.to_f64().unwrap_or(0.0),

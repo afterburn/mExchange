@@ -31,20 +31,62 @@ export interface OrderCancelledEvent {
 
 export type OrderEvent = OrderFilledEvent | OrderCancelledEvent;
 
+// Server response messages
+export interface AuthResultMessage {
+  type: 'auth_result';
+  success: boolean;
+  user_id?: string;
+  error?: string;
+}
+
+export interface OrderResultMessage {
+  type: 'order_result';
+  success: boolean;
+  order_id?: string;
+  error?: string;
+}
+
+export interface CancelResultMessage {
+  type: 'cancel_result';
+  success: boolean;
+  order_id: string;
+  error?: string;
+}
+
+export type ServerMessage = AuthResultMessage | OrderResultMessage | CancelResultMessage;
+
 type MessageHandler = (data: ChannelNotification) => void;
 type OrderEventHandler = (event: OrderEvent) => void;
+type AuthResultHandler = (result: AuthResultMessage) => void;
+type OrderResultHandler = (result: OrderResultMessage) => void;
+type CancelResultHandler = (result: CancelResultMessage) => void;
 
-export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEvent?: OrderEventHandler) {
+interface UseWebSocketOptions {
+  onMessage: MessageHandler;
+  onOrderEvent?: OrderEventHandler;
+  onAuthResult?: AuthResultHandler;
+  onOrderResult?: OrderResultHandler;
+  onCancelResult?: CancelResultHandler;
+}
+
+export function useWebSocket(url: string, options: UseWebSocketOptions) {
+  const { onMessage, onOrderEvent, onAuthResult, onOrderResult, onCancelResult } = options;
+
   const [isConnected, setIsConnected] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
   const onOrderEventRef = useRef(onOrderEvent);
+  const onAuthResultRef = useRef(onAuthResult);
+  const onOrderResultRef = useRef(onOrderResult);
+  const onCancelResultRef = useRef(onCancelResult);
   const subscribedChannelsRef = useRef<Set<string>>(new Set());
   const pendingSubscriptionsRef = useRef<Set<string>>(new Set());
+  const pendingAuthRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
 
-  // Keep message handler refs updated
+  // Keep handler refs updated
   useEffect(() => {
     onMessageRef.current = onMessage;
   }, [onMessage]);
@@ -52,6 +94,18 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
   useEffect(() => {
     onOrderEventRef.current = onOrderEvent;
   }, [onOrderEvent]);
+
+  useEffect(() => {
+    onAuthResultRef.current = onAuthResult;
+  }, [onAuthResult]);
+
+  useEffect(() => {
+    onOrderResultRef.current = onOrderResult;
+  }, [onOrderResult]);
+
+  useEffect(() => {
+    onCancelResultRef.current = onCancelResult;
+  }, [onCancelResult]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,9 +128,14 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
           console.log('[WebSocket] Connection established');
           setIsConnected(true);
 
+          // Re-authenticate if we have a pending token
+          if (pendingAuthRef.current) {
+            ws.send(JSON.stringify({ type: 'auth', token: pendingAuthRef.current }));
+          }
+
           // Process pending subscriptions
           pendingSubscriptionsRef.current.forEach(channel => {
-            ws.send(JSON.stringify({ action: 'subscribe', channel }));
+            ws.send(JSON.stringify({ type: 'subscribe', channel }));
             subscribedChannelsRef.current.add(channel);
           });
           pendingSubscriptionsRef.current.clear();
@@ -87,7 +146,7 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
           try {
             const data = JSON.parse(event.data);
 
-            // Check if this is an order lifecycle event (order_filled, order_cancelled)
+            // Check message type
             if (data.type === 'order_filled' || data.type === 'order_cancelled') {
               if (onOrderEventRef.current) {
                 onOrderEventRef.current(data as OrderEvent);
@@ -95,7 +154,29 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
               return;
             }
 
-            // Otherwise treat as channel notification
+            if (data.type === 'auth_result') {
+              setIsAuthenticated(data.success);
+              if (onAuthResultRef.current) {
+                onAuthResultRef.current(data as AuthResultMessage);
+              }
+              return;
+            }
+
+            if (data.type === 'order_result') {
+              if (onOrderResultRef.current) {
+                onOrderResultRef.current(data as OrderResultMessage);
+              }
+              return;
+            }
+
+            if (data.type === 'cancel_result') {
+              if (onCancelResultRef.current) {
+                onCancelResultRef.current(data as CancelResultMessage);
+              }
+              return;
+            }
+
+            // Channel notification
             if (data.channel_name && data.notification) {
               onMessageRef.current(data as ChannelNotification);
             }
@@ -112,6 +193,7 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
           if (!mountedRef.current) return;
 
           setIsConnected(false);
+          setIsAuthenticated(false);
           subscribedChannelsRef.current.clear();
 
           if (reconnectTimeoutRef.current) {
@@ -145,10 +227,17 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
     };
   }, [url]);
 
+  const authenticate = useCallback((token: string) => {
+    pendingAuthRef.current = token;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'auth', token }));
+    }
+  }, []);
+
   const subscribe = useCallback((channel: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       if (!subscribedChannelsRef.current.has(channel)) {
-        wsRef.current.send(JSON.stringify({ action: 'subscribe', channel }));
+        wsRef.current.send(JSON.stringify({ type: 'subscribe', channel }));
         subscribedChannelsRef.current.add(channel);
         pendingSubscriptionsRef.current.delete(channel);
       }
@@ -159,9 +248,45 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
 
   const unsubscribe = useCallback((channel: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'unsubscribe', channel }));
+      wsRef.current.send(JSON.stringify({ type: 'unsubscribe', channel }));
       subscribedChannelsRef.current.delete(channel);
     }
+  }, []);
+
+  const placeOrder = useCallback((params: {
+    symbol: string;
+    side: 'bid' | 'ask';
+    order_type: 'limit' | 'market';
+    price?: number;
+    quantity?: number;
+    quote_amount?: number;
+    max_slippage_price?: number;
+  }) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      const message = {
+        type: 'place_order',
+        ...params,
+      };
+      console.log('[WebSocket] Sending place_order:', message);
+      wsRef.current.send(JSON.stringify(message));
+      return true;
+    }
+    console.log('[WebSocket] Cannot place order - not connected');
+    return false;
+  }, []);
+
+  const cancelOrder = useCallback((orderId: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      const message = {
+        type: 'cancel_order',
+        order_id: orderId,
+      };
+      console.log('[WebSocket] Sending cancel_order:', message);
+      wsRef.current.send(JSON.stringify(message));
+      return true;
+    }
+    console.log('[WebSocket] Cannot cancel order - not connected');
+    return false;
   }, []);
 
   // Not using useCallback - we want this to always use current wsRef
@@ -177,5 +302,14 @@ export function useWebSocket(url: string, onMessage: MessageHandler, onOrderEven
     return false;
   };
 
-  return { isConnected, subscribe, unsubscribe, send };
+  return {
+    isConnected,
+    isAuthenticated,
+    authenticate,
+    subscribe,
+    unsubscribe,
+    placeOrder,
+    cancelOrder,
+    send,
+  };
 }

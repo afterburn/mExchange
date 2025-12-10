@@ -72,7 +72,7 @@ const SpreadRow = memo(function SpreadRow({
     <div className="border-t border-b border-white/10 py-2 px-3 bg-white/5 flex justify-between items-center">
       <span className="text-sm font-semibold text-white">{midPriceStr}</span>
       <span className="text-xs text-white/40">
-        Spread: {spreadStr} ({spreadPercentStr}%)
+        Spread: {spreadStr} ({spreadPercentStr} bps)
       </span>
     </div>
   );
@@ -132,13 +132,13 @@ const OrderBook = memo(function OrderBook({ bids, asks, maxLevels = 20 }: OrderB
       const bestAsk = asks[0]?.price || 0;
       const midPrice = (bestBid + bestAsk) / 2;
       const spread = bestAsk - bestBid;
-      const spreadPercent = bestBid > 0 ? (spread / bestBid) * 100 : 0;
+      const spreadBps = bestBid > 0 ? (spread / bestBid) * 10000 : 0;
       rows.push({
         type: 'spread',
         spreadInfo: {
           midPriceStr: midPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
           spreadStr: spread.toFixed(2),
-          spreadPercentStr: spreadPercent.toFixed(2),
+          spreadPercentStr: spreadBps.toFixed(1),
         },
       });
     }

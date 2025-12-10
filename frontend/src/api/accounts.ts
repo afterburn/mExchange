@@ -169,35 +169,7 @@ class AccountsAPI {
     });
   }
 
-  // Orders API
-  // Place order through gateway single entry point
-  // This handles fund locking in accounts AND forwarding to matching engine
-  async placeOrder(
-    symbol: string,
-    side: 'bid' | 'ask',
-    orderType: 'limit' | 'market',
-    quantity: string | null,
-    price?: string,
-    maxSlippagePrice?: string,
-    quoteAmount?: string
-  ): Promise<{ order_id: string; status: string }> {
-    // Build request body - omit null fields so serde can handle Option<T>
-    const body: Record<string, unknown> = {
-      symbol,
-      side,  // 'bid' or 'ask' - lowercase as expected by gateway
-      order_type: orderType,  // 'limit' or 'market' - lowercase
-    };
-    if (quantity) body.quantity = parseFloat(quantity);
-    if (price) body.price = parseFloat(price);
-    if (maxSlippagePrice) body.max_slippage_price = parseFloat(maxSlippagePrice);
-    if (quoteAmount) body.quote_amount = parseFloat(quoteAmount);
-
-    return this.fetch('/api/order', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-
+  // Orders API (order placement is via WebSocket only)
   async getOrders(limit: number = 20, offset: number = 0): Promise<{ orders: Order[]; total: number; limit: number; offset: number }> {
     return this.fetch(`/api/orders?limit=${limit}&offset=${offset}`);
   }
@@ -208,12 +180,6 @@ class AccountsAPI {
 
   async getOrderFills(orderId: string): Promise<{ fills: Trade[] }> {
     return this.fetch(`/api/orders/${orderId}/fills`);
-  }
-
-  async cancelOrder(orderId: string): Promise<{ order: Order }> {
-    return this.fetch(`/api/orders/${orderId}`, {
-      method: 'DELETE',
-    });
   }
 
   async getTrades(limit: number = 20, offset: number = 0): Promise<{ trades: Trade[]; total: number; limit: number; offset: number }> {

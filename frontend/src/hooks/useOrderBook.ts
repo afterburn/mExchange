@@ -315,7 +315,7 @@ export function useOrderBook() {
     scheduleUpdate();
   }, [scheduleUpdate]);
 
-  const { isConnected, subscribe, send } = useWebSocket(GATEWAY_URL, handleChannelNotification);
+  const { isConnected, subscribe, send } = useWebSocket(GATEWAY_URL, { onMessage: handleChannelNotification });
   const channelName = 'book.KCN/EUR.none.10.100ms';
   const wasConnectedRef = useRef(false);
   const hasFetchedOHLCVRef = useRef(false);

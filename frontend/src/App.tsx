@@ -162,7 +162,7 @@ function App() {
     }
   }, [fetchOrders, fetchBalances, addToast]);
 
-  const { orderBook, trades, stats, placeOrder, cancelOrder, isConnected } = useOrderBookWorker(handleTradeWithOrderId, handleOrderEvent);
+  const { orderBook, trades, stats, placeOrder, placeOrderWs, cancelOrderWs, isConnected, isWsAuthenticated } = useOrderBookWorker(handleTradeWithOrderId, handleOrderEvent);
 
   // Update document title with current price
   useEffect(() => {
@@ -205,34 +205,47 @@ function App() {
 
   const handlePlaceOrder = useCallback(async (side: 'Bid' | 'Ask', orderType: 'Limit' | 'Market', price: number | null, quantity: number | null, quoteAmount?: number) => {
     if (user) {
-      // Logged in: place order through gateway single entry point
-      // Gateway handles: 1) accounts fund locking, 2) forwarding to matching engine
+      // Logged in: place order through WebSocket
+      if (!isWsAuthenticated) {
+        addToast({
+          type: 'error',
+          title: 'Not Ready',
+          message: 'Connecting to trading server... please try again in a moment',
+        });
+        return;
+      }
+
       try {
         // For market buy orders, calculate max slippage price (best ask + 5% buffer)
-        let maxSlippagePrice: string | undefined;
+        let maxSlippagePrice: number | undefined;
         if (orderType === 'Market' && side === 'Bid' && stats.bestAsk) {
           const slippageBuffer = 1.05; // 5% slippage tolerance
-          maxSlippagePrice = (stats.bestAsk * slippageBuffer).toFixed(2);
+          maxSlippagePrice = stats.bestAsk * slippageBuffer;
         }
 
-        await accountsAPI.placeOrder(
-          'KCN/EUR',
-          side.toLowerCase() as 'bid' | 'ask',
-          orderType.toLowerCase() as 'limit' | 'market',
-          quantity !== null ? quantity.toString() : null,
-          price ? price.toString() : undefined,
-          maxSlippagePrice,
-          quoteAmount !== undefined ? quoteAmount.toString() : undefined
-        );
+        await placeOrderWs({
+          symbol: 'KCN/EUR',
+          side: side.toLowerCase() as 'bid' | 'ask',
+          order_type: orderType.toLowerCase() as 'limit' | 'market',
+          quantity: quantity !== null ? quantity : undefined,
+          price: price !== null ? price : undefined,
+          max_slippage_price: maxSlippagePrice,
+          quote_amount: quoteAmount,
+        });
+
         // Refresh balances and orders after placing
         fetchBalances();
         fetchOrders();
       } catch (e) {
         console.error('Failed to place order:', e);
-        alert((e as Error).message);
+        addToast({
+          type: 'error',
+          title: 'Order Failed',
+          message: (e as Error).message,
+        });
       }
     } else {
-      // Not logged in: just forward to matching engine (demo mode)
+      // Not logged in: just forward to matching engine (demo mode via WebSocket)
       // Demo mode requires quantity, so use calculated quantity
       if (quantity !== null) {
         placeOrder(side, orderType, price, quantity);
@@ -249,24 +262,38 @@ function App() {
         }
       }
     }
-  }, [user, placeOrder, nextOrderId, fetchBalances, fetchOrders, stats.bestAsk]);
+  }, [user, isWsAuthenticated, placeOrderWs, placeOrder, nextOrderId, fetchBalances, fetchOrders, stats.bestAsk, addToast]);
 
   const handleCancelOrder = useCallback(async (orderId: number | string) => {
     // Check if it's an API order (UUID string) or local order (number)
     if (typeof orderId === 'string') {
+      if (!isWsAuthenticated) {
+        addToast({
+          type: 'error',
+          title: 'Not Ready',
+          message: 'Connecting to trading server... please try again in a moment',
+        });
+        return;
+      }
+
+      // Use WebSocket for cancellation
       try {
-        await accountsAPI.cancelOrder(orderId);
+        await cancelOrderWs(orderId);
         fetchBalances();
         fetchOrders();
       } catch (e) {
         console.error('Failed to cancel order:', e);
-        alert((e as Error).message);
+        addToast({
+          type: 'error',
+          title: 'Cancel Failed',
+          message: (e as Error).message,
+        });
       }
     } else {
-      cancelOrder(orderId);
+      // Demo mode: just remove from local state (no persistent backend)
       setOpenOrders(prev => prev.filter(o => o.id !== orderId));
     }
-  }, [cancelOrder, fetchBalances, fetchOrders]);
+  }, [isWsAuthenticated, cancelOrderWs, fetchBalances, fetchOrders, addToast]);
 
   // Convert API orders to display format for OpenOrders component
   const displayOrders = useMemo((): Order[] => {
@@ -394,7 +421,7 @@ function App() {
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
             <span className={isConnected ? 'text-white/60' : 'text-yellow-500'}>
-              {isConnected ? 'Connected' : 'Connecting...'}
+              {isConnected ? (user && isWsAuthenticated ? 'Connected (Auth)' : 'Connected') : 'Connecting...'}
             </span>
           </div>
           <div className="ml-auto text-white/40">

@@ -8,11 +8,37 @@ pub use aggressive::Aggressive;
 pub use random::Random;
 pub use mean_reversion::MeanReversion;
 
-use crate::types::{MarketState, OrderRequest};
+use crate::types::{MarketState, OrderRequest, StrategyActions};
+use rust_decimal::Decimal;
+use std::collections::HashMap;
+use uuid::Uuid;
+
+/// Context passed to strategies with current state
+pub struct StrategyContext<'a> {
+    pub market: &'a MarketState,
+    pub symbol: &'a str,
+    pub open_orders: &'a HashMap<Uuid, crate::types::OpenOrder>,
+    pub inventory: Decimal,
+}
 
 pub trait Strategy: Send {
     fn name(&self) -> &'static str;
-    fn generate_orders(&mut self, market: &MarketState, symbol: &str) -> Vec<OrderRequest>;
+
+    /// Generate strategy actions (orders to cancel and place)
+    /// This is the new preferred method that supports cancel-and-replace
+    fn generate_actions(&mut self, ctx: &StrategyContext) -> StrategyActions;
+
+    /// Legacy method - default implementation wraps generate_actions
+    fn generate_orders(&mut self, market: &MarketState, symbol: &str) -> Vec<OrderRequest> {
+        let ctx = StrategyContext {
+            market,
+            symbol,
+            open_orders: &HashMap::new(),
+            inventory: Decimal::ZERO,
+        };
+        self.generate_actions(&ctx).orders_to_place
+    }
+
     fn interval_ms(&self) -> u64;
 }
 
@@ -31,6 +57,15 @@ impl StrategyType {
             StrategyType::Aggressive => Box::new(Aggressive::new()),
             StrategyType::Random => Box::new(Random::new()),
             StrategyType::MeanReversion => Box::new(MeanReversion::new()),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            StrategyType::MarketMaker => "MarketMaker",
+            StrategyType::Aggressive => "Aggressive",
+            StrategyType::Random => "Random",
+            StrategyType::MeanReversion => "MeanReversion",
         }
     }
 }

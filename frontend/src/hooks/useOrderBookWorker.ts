@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { OrderBook, OrderBookLevel, Trade, MarketStats, Side, OrderType } from '../types';
-import { useWebSocket, type OrderEvent } from './useWebSocket';
+import { useWebSocket, type OrderEvent, type OrderResultMessage, type CancelResultMessage, type AuthResultMessage } from './useWebSocket';
+import { useAuthStore } from '../stores/authStore';
 
 // Re-export OrderEvent for consumers
 export type { OrderEvent } from './useWebSocket';
@@ -89,10 +90,19 @@ export function useOrderBookWorker(
   onOrderEvent?: (event: OrderEvent) => void
 ) {
   const [marketState, setMarketState] = useState<MarketState>(initialMarketState);
+  const [isWsAuthenticated, setIsWsAuthenticated] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const updateScheduledRef = useRef(false);
   const lastUpdateTimeRef = useRef(0);
   const pendingUpdateRef = useRef<MarketStateUpdate | null>(null);
+
+  // Auth store for token
+  const accessToken = useAuthStore(state => state.accessToken);
+  const user = useAuthStore(state => state.user);
+
+  // Callbacks for order results
+  const orderResultCallbackRef = useRef<((result: OrderResultMessage) => void) | null>(null);
+  const cancelResultCallbackRef = useRef<((result: CancelResultMessage) => void) | null>(null);
 
   // Throttled state update
   const flushUpdate = useCallback(() => {
@@ -200,10 +210,63 @@ export function useOrderBookWorker(
     }
   }, [onTradeWithOrderId]);
 
-  const { isConnected, subscribe, send } = useWebSocket(GATEWAY_URL, handleChannelNotification, onOrderEvent);
+  // Handle auth result
+  const handleAuthResult = useCallback((result: AuthResultMessage) => {
+    console.log('[WS Auth] Result:', result);
+    setIsWsAuthenticated(result.success);
+  }, []);
+
+  // Handle order result
+  const handleOrderResult = useCallback((result: OrderResultMessage) => {
+    console.log('[WS Order] Result:', result);
+    if (orderResultCallbackRef.current) {
+      orderResultCallbackRef.current(result);
+      orderResultCallbackRef.current = null;
+    }
+  }, []);
+
+  // Handle cancel result
+  const handleCancelResult = useCallback((result: CancelResultMessage) => {
+    console.log('[WS Cancel] Result:', result);
+    if (cancelResultCallbackRef.current) {
+      cancelResultCallbackRef.current(result);
+      cancelResultCallbackRef.current = null;
+    }
+  }, []);
+
+  const {
+    isConnected,
+    isAuthenticated,
+    authenticate,
+    subscribe,
+    placeOrder: wsPlaceOrder,
+    cancelOrder: wsCancelOrder,
+    send
+  } = useWebSocket(GATEWAY_URL, {
+    onMessage: handleChannelNotification,
+    onOrderEvent,
+    onAuthResult: handleAuthResult,
+    onOrderResult: handleOrderResult,
+    onCancelResult: handleCancelResult,
+  });
+
   const channelName = 'book.KCN/EUR.none.10.100ms';
   const wasConnectedRef = useRef(false);
   const hasFetchedOHLCVRef = useRef(false);
+
+  // Authenticate when connected and we have a token
+  useEffect(() => {
+    if (isConnected && accessToken && user) {
+      console.log('[WS Auth] Sending auth token');
+      authenticate(accessToken);
+    }
+  }, [isConnected, accessToken, user, authenticate]);
+
+  // isWsAuthenticated is automatically reset when:
+  // 1. The WebSocket reconnects (handled in useWebSocket onclose)
+  // 2. Auth fails (handled in handleAuthResult)
+  // When user logs out, the WebSocket will be re-established and we won't re-auth
+  // because accessToken will be null
 
   // Fetch historical OHLCV data
   useEffect(() => {
@@ -248,7 +311,9 @@ export function useOrderBookWorker(
     }
   }, [isConnected, subscribe, channelName]);
 
-  const placeOrder = useCallback(async (side: Side, orderType: OrderType, price: number | null, quantity: number) => {
+  // Place order via WebSocket (for authenticated users) or HTTP (for demo)
+  const placeOrder = useCallback(async (side: Side, orderType: OrderType, price: number | null, quantity: number): Promise<{ orderId?: string }> => {
+    // Demo mode - use HTTP endpoint
     const response = await fetch(`${API_URL}/api/order`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -263,19 +328,88 @@ export function useOrderBookWorker(
     if (!response.ok) {
       throw new Error(`Order failed: ${response.statusText}`);
     }
+
+    return {};
   }, []);
 
-  const cancelOrder = useCallback(async (orderId: number) => {
-    const response = await fetch(`${API_URL}/api/order/cancel`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order_id: orderId }),
+  // Place order via WebSocket for authenticated users
+  const placeOrderWs = useCallback((params: {
+    symbol: string;
+    side: 'bid' | 'ask';
+    order_type: 'limit' | 'market';
+    price?: number;
+    quantity?: number;
+    quote_amount?: number;
+    max_slippage_price?: number;
+  }): Promise<OrderResultMessage> => {
+    return new Promise((resolve, reject) => {
+      if (!isAuthenticated && !isWsAuthenticated) {
+        reject(new Error('Not authenticated on WebSocket'));
+        return;
+      }
+
+      orderResultCallbackRef.current = (result) => {
+        if (result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error || 'Order failed'));
+        }
+      };
+
+      // Set timeout for response
+      const timeout = setTimeout(() => {
+        orderResultCallbackRef.current = null;
+        reject(new Error('Order timeout'));
+      }, 10000);
+
+      orderResultCallbackRef.current = (result) => {
+        clearTimeout(timeout);
+        if (result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error || 'Order failed'));
+        }
+      };
+
+      const sent = wsPlaceOrder(params);
+      if (!sent) {
+        clearTimeout(timeout);
+        orderResultCallbackRef.current = null;
+        reject(new Error('WebSocket not connected'));
+      }
     });
+  }, [isAuthenticated, isWsAuthenticated, wsPlaceOrder]);
 
-    if (!response.ok) {
-      throw new Error(`Cancel failed: ${response.statusText}`);
-    }
-  }, []);
+  // Cancel order via WebSocket
+  const cancelOrderWs = useCallback((orderId: string): Promise<CancelResultMessage> => {
+    return new Promise((resolve, reject) => {
+      if (!isAuthenticated && !isWsAuthenticated) {
+        reject(new Error('Not authenticated on WebSocket'));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        cancelResultCallbackRef.current = null;
+        reject(new Error('Cancel timeout'));
+      }, 10000);
+
+      cancelResultCallbackRef.current = (result) => {
+        clearTimeout(timeout);
+        if (result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error || 'Cancel failed'));
+        }
+      };
+
+      const sent = wsCancelOrder(orderId);
+      if (!sent) {
+        clearTimeout(timeout);
+        cancelResultCallbackRef.current = null;
+        reject(new Error('WebSocket not connected'));
+      }
+    });
+  }, [isAuthenticated, isWsAuthenticated, wsCancelOrder]);
 
   return useMemo(() => ({
     orderBook: marketState.orderBook,
@@ -283,8 +417,10 @@ export function useOrderBookWorker(
     priceHistory: marketState.priceHistory,
     stats: marketState.stats,
     placeOrder,
-    cancelOrder,
+    placeOrderWs,
+    cancelOrderWs,
     isConnected,
+    isWsAuthenticated: isAuthenticated || isWsAuthenticated,
     send,
-  }), [marketState, placeOrder, cancelOrder, isConnected, send]);
+  }), [marketState, placeOrder, placeOrderWs, cancelOrderWs, isConnected, isAuthenticated, isWsAuthenticated, send]);
 }

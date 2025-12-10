@@ -1,5 +1,6 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -23,6 +24,23 @@ pub struct OrderRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<Decimal>,
     pub quantity: Decimal,
+}
+
+/// Represents an open order tracked by the bot
+#[derive(Debug, Clone)]
+pub struct OpenOrder {
+    pub id: Uuid,
+    pub symbol: String,
+    pub side: Side,
+    pub price: Option<Decimal>,
+    pub quantity: Decimal,
+}
+
+/// Actions a strategy can take each iteration
+#[derive(Debug, Clone, Default)]
+pub struct StrategyActions {
+    pub orders_to_cancel: Vec<Uuid>,
+    pub orders_to_place: Vec<OrderRequest>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,9 +74,50 @@ impl MarketState {
     }
 }
 
+/// Gateway can send two formats:
+/// 1. Tagged messages with "type" field (orderbook_snapshot, trade, etc.)
+/// 2. Channel notifications with "channel_name" field
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum GatewayMessage {
+    /// Channel notification format (channel_name + notification)
+    ChannelNotification(ChannelNotification),
+    /// Tagged message format (type field)
+    Tagged(TaggedMessage),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelNotification {
+    pub channel_name: String,
+    pub notification: NotificationData,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NotificationData {
+    #[serde(default)]
+    pub trades: Vec<TradeData>,
+    #[serde(default)]
+    pub bid_changes: Vec<(f64, f64, f64)>, // (price, old_qty, new_qty)
+    #[serde(default)]
+    pub ask_changes: Vec<(f64, f64, f64)>,
+    #[serde(default)]
+    pub total_bid_amount: f64,
+    #[serde(default)]
+    pub total_ask_amount: f64,
+    #[serde(default)]
+    pub time: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TradeData {
+    pub price: f64,
+    pub quantity: f64,
+    pub side: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum GatewayMessage {
+pub enum TaggedMessage {
     OrderbookSnapshot {
         symbol: String,
         bids: Vec<PriceLevel>,

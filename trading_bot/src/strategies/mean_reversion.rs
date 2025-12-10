@@ -2,25 +2,20 @@ use rand::Rng;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
-use super::Strategy;
+use super::{Strategy, StrategyContext};
 use crate::indicators::z_score;
-use crate::types::{MarketState, OrderRequest, OrderType, Side};
+use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 
-const MAX_POSITION: Decimal = dec!(500);
+/// Maximum position
+const MAX_POSITION: Decimal = dec!(200);
 
-pub struct MeanReversion {
-    position: Decimal,
-}
+/// Mean reversion - only trades on extreme moves, provides counter-trend pressure
+/// Slower and less aggressive to allow trends to develop
+pub struct MeanReversion;
 
 impl MeanReversion {
     pub fn new() -> Self {
-        Self {
-            position: Decimal::ZERO,
-        }
-    }
-
-    fn round_price(price: Decimal) -> Decimal {
-        price.round_dp(2)
+        Self
     }
 
     fn round_quantity(qty: Decimal) -> Decimal {
@@ -34,132 +29,62 @@ impl Strategy for MeanReversion {
     }
 
     fn interval_ms(&self) -> u64 {
-        600
+        500 // Slower - 2x per second (patient strategy)
     }
 
-    fn generate_orders(&mut self, market: &MarketState, symbol: &str) -> Vec<OrderRequest> {
-        if market.price_history.len() < 10 {
-            return vec![];
-        }
-
-        let mid = match market.mid_price() {
-            Some(p) => p,
-            None => return vec![],
-        };
-
-        let z = z_score(&market.price_history).unwrap_or(Decimal::ZERO);
-        let z_abs = z.abs();
-
-        let mut orders = Vec::new();
+    fn generate_actions(&mut self, ctx: &StrategyContext) -> StrategyActions {
+        let mut actions = StrategyActions::default();
         let mut rng = rand::thread_rng();
 
-        // Price returned to mean - take profit on 30% of position
-        if z_abs < dec!(0.5) && self.position.abs() > dec!(10) {
-            let close_size = Self::round_quantity(self.position.abs() * dec!(0.3));
-            let side = if self.position > Decimal::ZERO {
-                Side::Ask
-            } else {
-                Side::Bid
-            };
-
-            orders.push(OrderRequest {
-                symbol: symbol.to_string(),
-                side,
-                order_type: OrderType::Market,
-                price: None,
-                quantity: close_size,
-            });
-
-            if side == Side::Ask {
-                self.position -= close_size;
-            } else {
-                self.position += close_size;
-            }
-            return orders;
+        if ctx.market.price_history.len() < 10 {
+            return actions;
         }
 
-        // Determine if overbought or oversold
-        let is_overbought = z > dec!(1.5);
-        let is_oversold = z < dec!(-1.5);
-        let is_extreme = z_abs > dec!(2.0);
+        let _mid = match ctx.market.mid_price() {
+            Some(p) => p,
+            None => return actions,
+        };
 
-        if !is_overbought && !is_oversold {
-            return vec![];
+        let z = z_score(&ctx.market.price_history).unwrap_or(Decimal::ZERO);
+        let z_abs = z.abs();
+
+        // Only trade on EXTREME moves (z > 2.5 std devs)
+        // This allows trends to develop before mean reversion kicks in
+        if z_abs < dec!(2.5) {
+            return actions;
         }
 
-        // Size scales with deviation (capped at 3 std devs)
-        let base_size = dec!(15) + Decimal::from(rng.gen_range(0u32..10u32));
-        let z_multiplier = z_abs.min(dec!(3));
-        let total_size = Self::round_quantity(base_size * z_multiplier);
+        // 50% chance to act even on extreme moves
+        if rng.gen_range(0..100) > 50 {
+            return actions;
+        }
 
-        // Fade the move: sell when overbought, buy when oversold
-        let side = if is_overbought { Side::Ask } else { Side::Bid };
+        let can_buy = ctx.inventory < MAX_POSITION;
+        let can_sell = ctx.inventory > -MAX_POSITION;
 
-        if is_extreme {
-            // 30% chance of market order for immediate fill
-            if rng.gen_range(0..100) < 30 {
-                let market_size = Self::round_quantity(total_size * dec!(0.3));
-                orders.push(OrderRequest {
-                    symbol: symbol.to_string(),
-                    side,
-                    order_type: OrderType::Market,
-                    price: None,
-                    quantity: market_size,
-                });
-            }
-
-            // 2-4 limit orders around current price
-            let num_limits = rng.gen_range(2..=4);
-            let limit_size_each = Self::round_quantity(total_size / Decimal::from(num_limits));
-
-            for i in 0..num_limits {
-                let offset = mid * dec!(0.0005) * Decimal::from(i + 1);
-                let price = if is_overbought {
-                    Self::round_price(mid + offset)
-                } else {
-                    Self::round_price(mid - offset)
-                };
-
-                if limit_size_each > dec!(0.01) && price > Decimal::ZERO {
-                    orders.push(OrderRequest {
-                        symbol: symbol.to_string(),
-                        side,
-                        order_type: OrderType::Limit,
-                        price: Some(price),
-                        quantity: limit_size_each,
-                    });
-                }
-            }
+        // Fade the extreme move
+        let is_overbought = z > dec!(2.5);
+        let side = if is_overbought && can_sell {
+            Side::Ask
+        } else if !is_overbought && can_buy {
+            Side::Bid
         } else {
-            // Mild conditions: 1-3 limit orders away from market
-            let num_limits = rng.gen_range(1..=3);
-            let limit_size_each = Self::round_quantity(total_size / Decimal::from(num_limits));
+            return actions;
+        };
 
-            for i in 0..num_limits {
-                let offset = mid * dec!(0.001) * Decimal::from(i + 1);
-                let price = if is_overbought {
-                    Self::round_price(mid + offset)
-                } else {
-                    Self::round_price(mid - offset)
-                };
+        // Moderate size
+        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(5u32..20u32)));
 
-                if limit_size_each > dec!(0.01) && price > Decimal::ZERO {
-                    orders.push(OrderRequest {
-                        symbol: symbol.to_string(),
-                        side,
-                        order_type: OrderType::Limit,
-                        price: Some(price),
-                        quantity: limit_size_each,
-                    });
-                }
-            }
-        }
+        // Use market orders to fade extremes
+        actions.orders_to_place.push(OrderRequest {
+            symbol: ctx.symbol.to_string(),
+            side,
+            order_type: OrderType::Market,
+            price: None,
+            quantity,
+        });
 
-        // Update position tracking
-        let position_delta = if is_overbought { -total_size } else { total_size };
-        self.position = (self.position + position_delta).clamp(-MAX_POSITION, MAX_POSITION);
-
-        orders
+        actions
     }
 }
 
