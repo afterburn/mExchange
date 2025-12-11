@@ -244,7 +244,7 @@ async fn start_websocket_consumer(gateway_ws_url: &str, aggregator: Arc<OhlcvAgg
 
                     // Subscribe to the orderbook channel to receive trades
                     let subscribe_msg = serde_json::json!({
-                        "action": "subscribe",
+                        "type": "subscribe",
                         "channel": "book.KCN/EUR.none.10.100ms"
                     });
 

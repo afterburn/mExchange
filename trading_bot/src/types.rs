@@ -134,6 +134,16 @@ pub enum TaggedMessage {
         quantity: Decimal,
         side: Side,
     },
+    /// Sent when an order is filled (partially or fully)
+    OrderFilled {
+        order_id: String,
+    },
+    /// Sent when an order is cancelled
+    OrderCancelled {
+        order_id: String,
+        #[serde(default)]
+        filled_quantity: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }

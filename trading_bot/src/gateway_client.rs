@@ -221,6 +221,8 @@ impl GatewayClient {
         }
 
         let market_state = market_state;
+        let open_orders = Arc::clone(&self.open_orders);
+        let inventory = Arc::clone(&self.inventory);
 
         // Spawn task to handle outgoing messages
         tokio::spawn(async move {
@@ -237,7 +239,7 @@ impl GatewayClient {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        if let Err(e) = Self::handle_message(&text, &market_state).await {
+                        if let Err(e) = Self::handle_message(&text, &market_state, &open_orders, &inventory).await {
                             warn!("Failed to handle message: {}", e);
                         }
                     }
@@ -303,6 +305,8 @@ impl GatewayClient {
     async fn handle_message(
         text: &str,
         market_state: &Arc<RwLock<MarketState>>,
+        open_orders: &Arc<RwLock<HashMap<Uuid, OpenOrder>>>,
+        inventory: &Arc<RwLock<rust_decimal::Decimal>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let msg: GatewayMessage = serde_json::from_str(text)?;
 
@@ -311,7 +315,7 @@ impl GatewayClient {
                 Self::handle_channel_notification(notif, market_state).await;
             }
             GatewayMessage::Tagged(tagged) => {
-                Self::handle_tagged_message(tagged, market_state).await;
+                Self::handle_tagged_message(tagged, market_state, open_orders, inventory).await;
             }
         }
 
@@ -366,6 +370,8 @@ impl GatewayClient {
     async fn handle_tagged_message(
         msg: TaggedMessage,
         market_state: &Arc<RwLock<MarketState>>,
+        open_orders: &Arc<RwLock<HashMap<Uuid, OpenOrder>>>,
+        inventory: &Arc<RwLock<rust_decimal::Decimal>>,
     ) {
         match msg {
             TaggedMessage::OrderbookSnapshot { bids, asks, .. } => {
@@ -394,6 +400,33 @@ impl GatewayClient {
                 let mut state = market_state.write().await;
                 state.update_price(price);
                 debug!("Trade: price={}", price);
+            }
+            TaggedMessage::OrderFilled { order_id } => {
+                // Parse order_id and update inventory based on the filled order
+                if let Ok(uuid) = Uuid::parse_str(&order_id) {
+                    let mut orders = open_orders.write().await;
+                    if let Some(order) = orders.remove(&uuid) {
+                        // Update inventory based on the order side
+                        let mut inv = inventory.write().await;
+                        match order.side {
+                            Side::Bid => *inv += order.quantity,  // Bought = increase inventory
+                            Side::Ask => *inv -= order.quantity,  // Sold = decrease inventory
+                        }
+                        info!("Order filled: {} ({:?} {} @ {:?}), inventory now: {}",
+                            order_id, order.side, order.quantity, order.price, *inv);
+                    } else {
+                        debug!("Order filled but not tracked: {}", order_id);
+                    }
+                }
+            }
+            TaggedMessage::OrderCancelled { order_id, .. } => {
+                // Remove from tracked orders
+                if let Ok(uuid) = Uuid::parse_str(&order_id) {
+                    let mut orders = open_orders.write().await;
+                    if orders.remove(&uuid).is_some() {
+                        debug!("Order cancelled and removed: {}", order_id);
+                    }
+                }
             }
             TaggedMessage::Unknown => {
                 debug!("Unknown tagged message type");
