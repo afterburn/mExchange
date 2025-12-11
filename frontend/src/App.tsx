@@ -435,7 +435,7 @@ function App() {
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
             <span className={isConnected ? 'text-white/60' : 'text-yellow-500'}>
-              {isConnected ? (user && isWsAuthenticated ? 'Connected (Auth)' : 'Connected') : 'Connecting...'}
+              {isConnected ? 'Connected' : 'Connecting...'}
             </span>
           </div>
           <div className="ml-auto text-white/40">
