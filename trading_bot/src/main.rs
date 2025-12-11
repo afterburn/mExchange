@@ -188,20 +188,8 @@ async fn run_strategy_with_own_account(
         // Get current market state (shared across all strategies)
         let state = shared_market_state.read().await.clone();
 
-        // Fetch THIS strategy's open orders only (from its own account)
-        let open_orders = match client.fetch_open_orders().await {
-            Ok(orders) => {
-                let mut map = std::collections::HashMap::new();
-                for order in orders {
-                    map.insert(order.id, order);
-                }
-                map
-            }
-            Err(e) => {
-                debug!("[{}] Failed to fetch open orders: {}", strategy_name, e);
-                std::collections::HashMap::new()
-            }
-        };
+        // Use locally tracked open orders (updated via WebSocket) - no REST call needed
+        let open_orders = client.open_orders().read().await.clone();
 
         let inventory = client.get_inventory().await;
 
@@ -218,14 +206,14 @@ async fn run_strategy_with_own_account(
 
         let has_actions = !actions.orders_to_cancel.is_empty() || !actions.orders_to_place.is_empty();
 
-        // Cancel THIS strategy's orders only
+        // Cancel orders via WebSocket (fast, no REST)
         for order_id in &actions.orders_to_cancel {
-            if let Err(e) = client.cancel_order_rest(*order_id).await {
+            if let Err(e) = client.cancel_order(*order_id).await {
                 debug!("[{}] Failed to cancel order {}: {}", strategy_name, order_id, e);
             }
         }
 
-        // Place new orders
+        // Place new orders via WebSocket
         for order in &actions.orders_to_place {
             if let Err(e) = client.submit_order(order).await {
                 warn!("[{}] Failed to submit order: {}", strategy_name, e);
