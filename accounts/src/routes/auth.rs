@@ -58,8 +58,11 @@ pub fn auth_routes() -> Router<AppState> {
         .route("/refresh", post(refresh_token))
         .route("/logout", post(logout));
 
-    // Dev-only: test auth endpoint that bypasses OTP
-    if std::env::var("ENVIRONMENT").unwrap_or_default() == "development" {
+    // Dev/bot login endpoint that bypasses OTP
+    // Enabled in development OR when ENABLE_BOT_LOGIN=true (for production bots)
+    let is_dev = std::env::var("ENVIRONMENT").unwrap_or_default() == "development";
+    let bot_login_enabled = std::env::var("ENABLE_BOT_LOGIN").unwrap_or_default() == "true";
+    if is_dev || bot_login_enabled {
         router = router.route("/dev-login", post(dev_login));
     }
 

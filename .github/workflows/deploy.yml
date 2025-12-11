@@ -121,6 +121,7 @@ jobs:
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           ENVIRONMENT=production
+          ENABLE_BOT_LOGIN=true
           MAIL_PROVIDER=${{ vars.MAIL_PROVIDER }}
           SMTP_HOST=${{ secrets.SMTP_HOST }}
           SMTP_PORT=${{ vars.SMTP_PORT }}
