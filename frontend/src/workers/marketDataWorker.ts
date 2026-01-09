@@ -220,16 +220,25 @@ interface Stats24h {
   last_price: number;
 }
 
+// Trade tuple format: [price, quantity, side, timestamp, is_liquidation]
+type TradeTuple = [number, number, string, number, boolean];
+
+// Helper to extract data from trade tuple
+function extractTrade(t: TradeTuple) {
+  return { price: t[0], quantity: t[1], side: t[2], timestamp: t[3], isLiquidation: t[4] };
+}
+
 interface ChannelNotification {
   channel_name: string;
   notification: {
-    trades: Array<{ price: number; quantity: number; side: string; timestamp: number }>;
+    trades: TradeTuple[];
     bid_changes: Array<[number, number, number]>;
     ask_changes: Array<[number, number, number]>;
     total_bid_amount: number;
     total_ask_amount: number;
     time: number;
     stats_24h?: Stats24h;
+    snapshot?: boolean;
   };
 }
 
@@ -262,7 +271,13 @@ interface MarketStateUpdate {
 // Process incoming WebSocket messages
 function processChannelNotification(data: ChannelNotification): void {
   const { notification } = data;
-  const isSnapshot = !hasReceivedSnapshot;
+
+  // On snapshot, clear existing orderbook data first
+  if (notification.snapshot) {
+    bids.clear();
+    asks.clear();
+    hasReceivedSnapshot = true;
+  }
 
   // Apply bid changes
   for (let i = 0; i < notification.bid_changes.length; i++) {
@@ -296,28 +311,35 @@ function processChannelNotification(data: ChannelNotification): void {
 
   // Process trades
   if (notification.trades && notification.trades.length > 0) {
+    console.log('[Worker] Processing trades:', notification.trades);
     const baseId = Date.now();
 
     for (let i = 0; i < notification.trades.length; i++) {
-      const trade = notification.trades[i];
-      const timeInSeconds = Math.floor(trade.timestamp / 1000);
+      const trade = extractTrade(notification.trades[i]);
+      // timestamp is in seconds with decimals, convert to ms
+      const timestampMs = Math.floor(trade.timestamp * 1000);
+      const timeInSeconds = Math.floor(trade.timestamp);
 
       binaryInsertPricePoint(priceHistory, {
         price: trade.price,
         time: timeInSeconds,
       });
 
-      trades.unshift({
+      const newTrade = {
         id: baseId + i,
         price: trade.price,
         quantity: trade.quantity,
-        side: trade.side === 'buy' ? 'Bid' : 'Ask',
-        timestamp: trade.timestamp,
+        side: trade.side === 'buy' ? 'Bid' : 'Ask' as 'Bid' | 'Ask',
+        timestamp: timestampMs,
         priceStr: formatPrice(trade.price),
         quantityStr: formatQuantityShort(trade.quantity),
-        timeStr: formatTime(trade.timestamp),
-      });
+        timeStr: formatTime(timestampMs),
+      };
+      console.log('[Worker] Adding trade:', newTrade);
+      trades.unshift(newTrade);
     }
+
+    console.log('[Worker] Total trades after processing:', trades.length);
 
     if (trades.length > TRADES_LIMIT) {
       trades.length = TRADES_LIMIT;
@@ -326,10 +348,6 @@ function processChannelNotification(data: ChannelNotification): void {
     if (priceHistory.length > PRICE_HISTORY_LIMIT) {
       priceHistory = priceHistory.slice(-PRICE_HISTORY_LIMIT);
     }
-  }
-
-  if (isSnapshot) {
-    hasReceivedSnapshot = true;
   }
 }
 
@@ -389,11 +407,14 @@ function getMarketStateUpdate(): MarketStateUpdate {
 // Worker message handler
 self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   const message = event.data;
+  console.log('[Worker] Received message type:', message.type);
 
   switch (message.type) {
     case 'PROCESS_MESSAGE':
       processChannelNotification(message.data);
-      self.postMessage(getMarketStateUpdate());
+      const update = getMarketStateUpdate();
+      console.log('[Worker] Sending update with trades:', update.trades.length);
+      self.postMessage(update);
       break;
 
     case 'LOAD_OHLCV':

@@ -132,10 +132,10 @@ impl GatewayServer {
             .route("/api/faucet/*path", any(proxy_accounts))
             .with_state(self.proxy_state.clone());
 
-        // Proxy router for market_data service endpoints
-        let market_data_proxy_router = Router::new()
-            .route("/api/ohlcv", any(proxy_market_data))
-            .route("/api/ohlcv/*path", any(proxy_market_data))
+        // OHLCV routes - proxy to accounts service (where OHLCV data is stored)
+        let ohlcv_proxy_router = Router::new()
+            .route("/api/ohlcv", any(proxy_accounts))
+            .route("/api/ohlcv/*path", any(proxy_accounts))
             .with_state(self.proxy_state.clone());
 
         Router::new()
@@ -145,7 +145,7 @@ impl GatewayServer {
             .route("/api/bot/stop", post(stop_bot))
             .route("/api/bot/status", get(bot_status))
             .merge(accounts_proxy_router)
-            .merge(market_data_proxy_router)
+            .merge(ohlcv_proxy_router)
             .layer(cors)
             .with_state((
                 self.state.clone(),
@@ -227,12 +227,49 @@ impl GatewayServer {
                             }
                         };
 
+                        // Debug: log JSON to verify format
+                        if trades_count > 0 {
+                            info!("Trade notification JSON: {}", &json[..json.len().min(500)]);
+                        } else if bid_changes_count > 0 || ask_changes_count > 0 {
+                            info!("Delta notification JSON: {}", &json[..json.len().min(800)]);
+                        }
+
                         let cm = channel_manager.read().await;
+
+                        // Broadcast to book.* channel subscribers
                         let subscribers = cm.get_subscribers(&channel_name);
                         info!("Channel {} has {} subscribers", channel_name, subscribers.len());
                         for client_id in subscribers {
                             if let Some(sender) = cm.get_sender(client_id) {
                                 let _ = sender.send(json.clone());
+                            }
+                        }
+
+                        // Also broadcast to ticker.* subscribers
+                        let ticker_channel = format!("ticker.{}.1000ms", symbol);
+                        let ticker_subscribers = cm.get_subscribers(&ticker_channel);
+                        if !ticker_subscribers.is_empty() {
+                            let ticker_notification = ob_state.get_ticker_notification(&symbol, "1000ms");
+                            if let Ok(ticker_json) = serde_json::to_string(&ticker_notification) {
+                                for client_id in ticker_subscribers {
+                                    if let Some(sender) = cm.get_sender(client_id) {
+                                        let _ = sender.send(ticker_json.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        // Also broadcast to lwt.* subscribers
+                        let lwt_channel = format!("lwt.{}.1000ms", symbol);
+                        let lwt_subscribers = cm.get_subscribers(&lwt_channel);
+                        if !lwt_subscribers.is_empty() {
+                            let lwt_notification = ob_state.get_lwt_notification(&symbol, "1000ms");
+                            if let Ok(lwt_json) = serde_json::to_string(&lwt_notification) {
+                                for client_id in lwt_subscribers {
+                                    if let Some(sender) = cm.get_sender(client_id) {
+                                        let _ = sender.send(lwt_json.clone());
+                                    }
+                                }
                             }
                         }
                     } else {

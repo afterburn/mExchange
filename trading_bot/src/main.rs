@@ -65,10 +65,11 @@ async fn main() -> Result<(), BoxError> {
             StrategyType::Aggressive,
             StrategyType::Random,
             StrategyType::MeanReversion,
+            StrategyType::RandomWalk,
         ]
     } else if args.strategies.is_empty() {
-        warn!("No strategies specified, defaulting to MarketMaker");
-        vec![StrategyType::MarketMaker]
+        warn!("No strategies specified, defaulting to RandomWalk");
+        vec![StrategyType::RandomWalk]
     } else {
         args.strategies
     };
@@ -93,9 +94,9 @@ async fn main() -> Result<(), BoxError> {
         return Err(e);
     }
 
-    // Fund the seeder
-    let _ = seeder_client.deposit("EUR", "10000000").await;
-    let _ = seeder_client.mint("KCN", "10000000").await;
+    // Fund the seeder (effectively unlimited)
+    let _ = seeder_client.deposit("EUR", "10000000000").await;
+    let _ = seeder_client.mint("KCN", "10000000000").await;
 
     // Connect seeder to WebSocket for market data
     if let Err(e) = seeder_client.connect_websocket_with_state(Arc::clone(&shared_market_state)).await {
@@ -162,11 +163,11 @@ async fn run_strategy_with_own_account(
     info!("[{}] Logging in as {}", strategy_name, bot.email);
     client.login(&bot.email).await?;
 
-    // Fund this bot's account
-    if let Err(e) = client.deposit("EUR", "1000000").await {
+    // Fund this bot's account (effectively unlimited)
+    if let Err(e) = client.deposit("EUR", "10000000000").await {
         warn!("[{}] EUR deposit: {}", strategy_name, e);
     }
-    if let Err(e) = client.mint("KCN", "1000000").await {
+    if let Err(e) = client.mint("KCN", "10000000000").await {
         warn!("[{}] KCN mint: {}", strategy_name, e);
     }
 

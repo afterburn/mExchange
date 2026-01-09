@@ -2,6 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -13,71 +14,100 @@ use crate::events::{MarketEvent, OrderCommand, Side};
 use crate::proxy::ProxyState;
 use crate::udp_transport::UdpOrderSender;
 
-
-/// All possible client message types
+/// JSON-RPC style client request
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type")]
-pub enum ClientMessage {
-    /// Authenticate with JWT token
-    #[serde(rename = "auth")]
-    Auth { token: String },
-
-    /// Subscribe to a channel
-    #[serde(rename = "subscribe")]
-    Subscribe { channel: String },
-
-    /// Unsubscribe from a channel
-    #[serde(rename = "unsubscribe")]
-    Unsubscribe { channel: String },
-
-    /// Place an order (requires auth)
-    #[serde(rename = "place_order")]
-    PlaceOrder {
-        symbol: String,
-        side: String,
-        order_type: String,
-        #[serde(default)]
-        price: Option<Decimal>,
-        #[serde(default)]
-        quantity: Option<Decimal>,
-        #[serde(default)]
-        quote_amount: Option<Decimal>,
-        #[serde(default)]
-        max_slippage_price: Option<Decimal>,
-    },
-
-    /// Cancel an order (requires auth)
-    #[serde(rename = "cancel_order")]
-    CancelOrder { order_id: String },
-
-    /// Bot registration
-    #[serde(rename = "register_bot")]
-    RegisterBot,
-
-    /// Bot status update
-    #[serde(rename = "bot_status")]
-    BotStatus { strategies: Vec<StrategyStatus> },
+pub struct ClientRequest {
+    pub id: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
 }
 
-/// Server response messages
+/// Subscription parameters
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubscribeParams {
+    pub channels: Vec<String>,
+}
+
+/// Auth parameters
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthParams {
+    pub token: String,
+}
+
+/// Place order parameters
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlaceOrderParams {
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    #[serde(default)]
+    pub price: Option<Decimal>,
+    #[serde(default)]
+    pub quantity: Option<Decimal>,
+    #[serde(default)]
+    pub quote_amount: Option<Decimal>,
+    #[serde(default)]
+    pub max_slippage_price: Option<Decimal>,
+}
+
+/// Cancel order parameters
+#[derive(Debug, Clone, Deserialize)]
+pub struct CancelOrderParams {
+    pub order_id: String,
+}
+
+/// Bot status parameters
+#[derive(Debug, Clone, Deserialize)]
+pub struct BotStatusParams {
+    pub strategies: Vec<StrategyStatus>,
+}
+
+/// JSON-RPC style success response
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub enum ServerMessage {
-    /// Authentication result
-    #[serde(rename = "auth_result")]
-    AuthResult { success: bool, user_id: Option<String>, error: Option<String> },
+pub struct SuccessResponse<T: Serialize> {
+    pub id: String,
+    pub result: T,
+}
 
-    /// Order placement result
-    #[serde(rename = "order_result")]
-    OrderResult { success: bool, order_id: Option<String>, error: Option<String> },
+/// JSON-RPC style error response
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorResponse {
+    pub id: String,
+    pub error: RpcError,
+}
 
-    /// Order cancellation result
-    #[serde(rename = "cancel_result")]
-    CancelResult { success: bool, order_id: String, error: Option<String> },
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcError {
+    pub code: i32,
+    pub message: String,
+}
 
-    /// Error message
-    #[serde(rename = "error")]
-    Error { message: String },
+/// Error codes
+pub const ERR_INVALID_PARAMS: i32 = -32602;
+pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
+pub const ERR_UNAUTHORIZED: i32 = 10000;
+pub const ERR_ORDER_REJECTED: i32 = 10001;
+pub const ERR_CANCEL_FAILED: i32 = 10002;
+
+/// Auth result for private methods
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthResult {
+    pub access_token: String,
+    pub token_type: String,
+    pub user_id: String,
+}
+
+/// Order placement result
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderResult {
+    pub order_id: String,
+}
+
+/// Order cancellation result
+#[derive(Debug, Clone, Serialize)]
+pub struct CancelResult {
+    pub order_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +149,8 @@ pub struct NotificationData {
     pub time: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stats_24h: Option<Stats24h>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,16 +162,93 @@ pub struct Stats24h {
     pub last_price: f64,
 }
 
+/// Ticker channel notification (ticker.SYMBOL.INTERVAL)
 #[derive(Debug, Clone, Serialize)]
+pub struct TickerNotification {
+    pub channel_name: String,
+    pub notification: TickerData,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TickerData {
+    pub mark_price: f64,
+    pub mark_timestamp: f64,
+    pub best_bid_price: f64,
+    pub best_bid_amount: f64,
+    pub best_ask_price: f64,
+    pub best_ask_amount: f64,
+    pub last_price: f64,
+    pub delta: f64,
+    pub volume_24h: f64,
+    pub value_24h: f64,
+    pub low_price_24h: f64,
+    pub high_price_24h: f64,
+    pub change_24h: f64,
+    pub index: f64,
+    pub forward: f64,
+    pub funding_mark: f64,
+    pub funding_rate: f64,
+    pub collar_low: f64,
+    pub collar_high: f64,
+    pub realised_funding_24h: f64,
+    pub average_funding_rate_24h: f64,
+    pub open_interest: f64,
+}
+
+/// LWT (Last, Best Bid/Ask, Mark) channel notification (lwt.SYMBOL.INTERVAL)
+#[derive(Debug, Clone, Serialize)]
+pub struct LwtNotification {
+    pub channel_name: String,
+    pub notification: LwtData,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LwtData {
+    pub b: (f64, f64, f64), // best bid: [price, amount, total]
+    pub a: (f64, f64, f64), // best ask: [price, amount, total]
+    pub l: f64,             // last price
+    pub m: f64,             // mark price
+}
+
+/// Index components channel notification (index_components.INDEX)
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexComponentsNotification {
+    pub channel_name: String,
+    pub notification: IndexComponentsData,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexComponentsData {
+    pub index_price: f64,
+    pub components: std::collections::HashMap<String, f64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TradeData {
     pub price: f64,
     pub quantity: f64,
     pub side: String,
-    pub timestamp: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: f64,
+    pub is_liquidation: bool,
     pub buy_order_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sell_order_id: Option<String>,
+}
+
+// Serialize TradeData as tuple: [price, quantity, side, timestamp, is_liquidation]
+impl serde::Serialize for TradeData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+        let mut tuple = serializer.serialize_tuple(5)?;
+        tuple.serialize_element(&self.price)?;
+        tuple.serialize_element(&self.quantity)?;
+        tuple.serialize_element(&self.side)?;
+        tuple.serialize_element(&self.timestamp)?;
+        tuple.serialize_element(&self.is_liquidation)?;
+        tuple.end()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -377,193 +486,30 @@ pub async fn handle_websocket_connection(
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             info!("Client {} received message: {}", client_id_clone, &text[..text.len().min(200)]);
-            match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(ClientMessage::Auth { token }) => {
+
+            // Parse as JSON-RPC style request
+            let request: ClientRequest = match serde_json::from_str(&text) {
+                Ok(req) => req,
+                Err(e) => {
+                    warn!("Invalid client message: {} - {}", text, e);
+                    continue;
+                }
+            };
+
+            let request_id = request.id.clone();
+
+            match request.method.as_str() {
+                "public/auth" => {
                     info!("Client {} auth request", client_id_clone);
-                    // Validate token by calling accounts service
-                    let result = validate_token(&proxy_state, &token).await;
-
-                    let response = match result {
-                        Ok(user_id) => {
-                            let mut cm = channel_manager_clone.write().await;
-                            cm.authenticate_client(client_id_clone, user_id);
-                            ServerMessage::AuthResult {
-                                success: true,
-                                user_id: Some(user_id.to_string()),
-                                error: None,
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Auth failed for client {}: {}", client_id_clone, e);
-                            ServerMessage::AuthResult {
-                                success: false,
-                                user_id: None,
-                                error: Some(e),
-                            }
-                        }
-                    };
-
-                    if let Ok(json) = serde_json::to_string(&response) {
-                        let _ = tx_for_recv.send(json);
-                    }
-                }
-
-                Ok(ClientMessage::Subscribe { channel }) => {
-                    let symbol = channel
-                        .strip_prefix("book.")
-                        .and_then(|s| s.split('.').next())
-                        .unwrap_or("KCN/EUR");
-
-                    let ob_states = orderbook_states_clone.read().await;
-                    if let Some(ob_state) = ob_states.get(symbol) {
-                        let snapshot = ob_state.get_orderbook_snapshot(symbol);
-                        if let Ok(json) = serde_json::to_string(&snapshot) {
-                            let _ = tx_for_recv.send(json);
-                            info!("Sent orderbook snapshot to client {} for {}", client_id_clone, symbol);
-                        }
-                    }
-                    drop(ob_states);
-
-                    let mut cm = channel_manager_clone.write().await;
-                    cm.subscribe(client_id_clone, channel, tx_for_recv.clone());
-                }
-
-                Ok(ClientMessage::Unsubscribe { channel }) => {
-                    let mut cm = channel_manager_clone.write().await;
-                    cm.unsubscribe(client_id_clone, &channel);
-                }
-
-                Ok(ClientMessage::PlaceOrder { symbol, side, order_type, price, quantity, quote_amount, max_slippage_price }) => {
-                    info!("Client {} PlaceOrder: symbol={}, side={}, type={}, price={:?}, qty={:?}",
-                        client_id_clone, symbol, side, order_type, price, quantity);
-                    let cm = channel_manager_clone.read().await;
-                    let user_id = cm.get_user_id(client_id_clone);
-                    drop(cm);
-
-                    if user_id.is_none() {
-                        let response = ServerMessage::OrderResult {
-                            success: false,
-                            order_id: None,
-                            error: Some("Not authenticated".into()),
-                        };
-                        if let Ok(json) = serde_json::to_string(&response) {
-                            let _ = tx_for_recv.send(json);
-                        }
-                        continue;
-                    }
-
-                    let user_id = user_id.unwrap();
-
-                    // Call accounts service to create order and lock funds
-                    info!("Client {} calling create_order_in_accounts...", client_id_clone);
-                    let result = create_order_in_accounts(
-                        &proxy_state,
-                        &symbol,
-                        &side,
-                        &order_type,
-                        price,
-                        quantity,
-                        quote_amount,
-                        max_slippage_price,
-                        user_id,
-                    ).await;
-                    info!("Client {} create_order_in_accounts result: {:?}", client_id_clone, result.is_ok());
-
-                    let response = match result {
-                        Ok((order_id, qty)) => {
-                            info!("Client {} order created in accounts: order_id={}, qty={}", client_id_clone, order_id, qty);
-                            // Register order ownership for targeted events
-                            {
-                                let mut cm = channel_manager_clone.write().await;
-                                cm.register_order(order_id, user_id);
-                            }
-
-                            // Parse side
-                            let side_enum = match side.as_str() {
-                                "bid" => Side::Bid,
-                                "ask" => Side::Ask,
-                                _ => {
-                                    let response = ServerMessage::OrderResult {
-                                        success: false,
-                                        order_id: None,
-                                        error: Some("Invalid side".into()),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&response) {
-                                        let _ = tx_for_recv.send(json);
-                                    }
-                                    continue;
-                                }
-                            };
-
-                            // Send to matching engine
-                            let command = OrderCommand::PlaceOrder {
-                                order_id,
-                                side: side_enum,
-                                order_type: order_type.clone(),
-                                price,
-                                quantity: qty,
-                                user_id: Some(user_id),
-                            };
-
-                            info!("Sending order to matching engine: {:?}", command);
-                            if let Err(e) = order_sender_clone.send_order_command(&command).await {
-                                error!("Failed to send order to matching engine: {}", e);
-                                // TODO: Compensating transaction to cancel order in accounts
-                                ServerMessage::OrderResult {
-                                    success: false,
-                                    order_id: Some(order_id.to_string()),
-                                    error: Some("Failed to submit to matching engine".into()),
-                                }
-                            } else {
-                                ServerMessage::OrderResult {
-                                    success: true,
-                                    order_id: Some(order_id.to_string()),
-                                    error: None,
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Client {} create_order_in_accounts error: {}", client_id_clone, e);
-                            ServerMessage::OrderResult {
-                                success: false,
-                                order_id: None,
-                                error: Some(e),
-                            }
-                        }
-                    };
-
-                    if let Ok(json) = serde_json::to_string(&response) {
-                        let _ = tx_for_recv.send(json);
-                    }
-                }
-
-                Ok(ClientMessage::CancelOrder { order_id }) => {
-                    let cm = channel_manager_clone.read().await;
-                    let user_id = cm.get_user_id(client_id_clone);
-                    drop(cm);
-
-                    if user_id.is_none() {
-                        let response = ServerMessage::CancelResult {
-                            success: false,
-                            order_id: order_id.clone(),
-                            error: Some("Not authenticated".into()),
-                        };
-                        if let Ok(json) = serde_json::to_string(&response) {
-                            let _ = tx_for_recv.send(json);
-                        }
-                        continue;
-                    }
-
-                    let user_id = user_id.unwrap();
-
-                    // Parse order_id
-                    let order_uuid = match order_id.parse::<Uuid>() {
-                        Ok(id) => id,
+                    let params: AuthParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
                         Err(_) => {
-                            let response = ServerMessage::CancelResult {
-                                success: false,
-                                order_id: order_id.clone(),
-                                error: Some("Invalid order ID".into()),
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params: expected {token: string}".into(),
+                                },
                             };
                             if let Ok(json) = serde_json::to_string(&response) {
                                 let _ = tx_for_recv.send(json);
@@ -572,12 +518,394 @@ pub async fn handle_websocket_connection(
                         }
                     };
 
-                    // Cancel in accounts service first
-                    let result = cancel_order_in_accounts(&proxy_state, &order_id, user_id).await;
+                    let result = validate_token(&proxy_state, &params.token).await;
 
-                    let response = match result {
+                    match result {
+                        Ok(user_id) => {
+                            let mut cm = channel_manager_clone.write().await;
+                            cm.authenticate_client(client_id_clone, user_id);
+                            let response = SuccessResponse {
+                                id: request_id,
+                                result: AuthResult {
+                                    access_token: params.token,
+                                    token_type: "bearer".into(),
+                                    user_id: user_id.to_string(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Auth failed for client {}: {}", client_id_clone, e);
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_UNAUTHORIZED,
+                                    message: e,
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                        }
+                    }
+                }
+
+                "public/subscribe" => {
+                    let params: SubscribeParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params: expected {channels: string[]}".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    let subscribed_channels = params.channels.clone();
+
+                    for channel in params.channels {
+                        // Parse channel type and symbol from channel name
+                        let parts: Vec<&str> = channel.split('.').collect();
+                        let channel_type = parts.get(0).copied().unwrap_or("");
+                        let symbol = parts.get(1).copied().unwrap_or("KCN/EUR");
+                        let interval = parts.last().copied().unwrap_or("1000ms");
+
+                        // Send initial snapshot based on channel type
+                        let ob_states = orderbook_states_clone.read().await;
+                        if let Some(ob_state) = ob_states.get(symbol) {
+                            match channel_type {
+                                "book" => {
+                                    let mut snapshot = ob_state.get_orderbook_snapshot(symbol);
+                                    // Use the subscribed channel name in the snapshot
+                                    snapshot.channel_name = channel.clone();
+                                    let trades_count = snapshot.notification.trades.len();
+                                    if let Ok(json) = serde_json::to_string(&snapshot) {
+                                        let _ = tx_for_recv.send(json);
+                                        info!("Sent orderbook snapshot to client {} for {} with {} trades", client_id_clone, symbol, trades_count);
+                                    }
+                                }
+                                "ticker" => {
+                                    let ticker = ob_state.get_ticker_notification(symbol, interval);
+                                    if let Ok(json) = serde_json::to_string(&ticker) {
+                                        let _ = tx_for_recv.send(json);
+                                        info!("Sent ticker snapshot to client {} for {}", client_id_clone, symbol);
+                                    }
+                                }
+                                "lwt" => {
+                                    let lwt = ob_state.get_lwt_notification(symbol, interval);
+                                    if let Ok(json) = serde_json::to_string(&lwt) {
+                                        let _ = tx_for_recv.send(json);
+                                        info!("Sent lwt snapshot to client {} for {}", client_id_clone, symbol);
+                                    }
+                                }
+                                _ => {
+                                    info!("Unknown channel type: {}", channel_type);
+                                }
+                            }
+                        }
+                        drop(ob_states);
+
+                        let mut cm = channel_manager_clone.write().await;
+                        cm.subscribe(client_id_clone, channel, tx_for_recv.clone());
+                    }
+
+                    // Send subscription confirmation
+                    let response = SuccessResponse {
+                        id: request_id,
+                        result: subscribed_channels,
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = tx_for_recv.send(json);
+                    }
+                }
+
+                "private/subscribe" => {
+                    // Private subscriptions require authentication
+                    let cm = channel_manager_clone.read().await;
+                    let user_id = cm.get_user_id(client_id_clone);
+                    drop(cm);
+
+                    if user_id.is_none() {
+                        let response = ErrorResponse {
+                            id: request_id,
+                            error: RpcError {
+                                code: ERR_UNAUTHORIZED,
+                                message: "Not authenticated".into(),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            let _ = tx_for_recv.send(json);
+                        }
+                        continue;
+                    }
+
+                    let params: SubscribeParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params: expected {channels: string[]}".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    let subscribed_channels = params.channels.clone();
+
+                    for channel in params.channels {
+                        let mut cm = channel_manager_clone.write().await;
+                        cm.subscribe(client_id_clone, channel, tx_for_recv.clone());
+                    }
+
+                    let response = SuccessResponse {
+                        id: request_id,
+                        result: subscribed_channels,
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = tx_for_recv.send(json);
+                    }
+                }
+
+                "unsubscribe" => {
+                    let params: SubscribeParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params: expected {channels: string[]}".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    let unsubscribed_channels = params.channels.clone();
+
+                    for channel in params.channels {
+                        let mut cm = channel_manager_clone.write().await;
+                        cm.unsubscribe(client_id_clone, &channel);
+                    }
+
+                    let response = SuccessResponse {
+                        id: request_id,
+                        result: unsubscribed_channels,
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = tx_for_recv.send(json);
+                    }
+                }
+
+                "private/place_order" => {
+                    let cm = channel_manager_clone.read().await;
+                    let user_id = cm.get_user_id(client_id_clone);
+                    drop(cm);
+
+                    if user_id.is_none() {
+                        let response = ErrorResponse {
+                            id: request_id,
+                            error: RpcError {
+                                code: ERR_UNAUTHORIZED,
+                                message: "Not authenticated".into(),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            let _ = tx_for_recv.send(json);
+                        }
+                        continue;
+                    }
+
+                    let user_id = user_id.unwrap();
+
+                    let params: PlaceOrderParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params for place_order".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    info!("Client {} PlaceOrder: symbol={}, side={}, type={}, price={:?}, qty={:?}",
+                        client_id_clone, params.symbol, params.side, params.order_type, params.price, params.quantity);
+
+                    // Call accounts service to create order and lock funds
+                    info!("Client {} calling create_order_in_accounts...", client_id_clone);
+                    let result = create_order_in_accounts(
+                        &proxy_state,
+                        &params.symbol,
+                        &params.side,
+                        &params.order_type,
+                        params.price,
+                        params.quantity,
+                        params.quote_amount,
+                        params.max_slippage_price,
+                        user_id,
+                    ).await;
+                    info!("Client {} create_order_in_accounts result: {:?}", client_id_clone, result.is_ok());
+
+                    match result {
+                        Ok((order_id, qty)) => {
+                            info!("Client {} order created in accounts: order_id={}, qty={}", client_id_clone, order_id, qty);
+                            {
+                                let mut cm = channel_manager_clone.write().await;
+                                cm.register_order(order_id, user_id);
+                            }
+
+                            let side_enum = match params.side.as_str() {
+                                "bid" => Side::Bid,
+                                "ask" => Side::Ask,
+                                _ => {
+                                    let response = ErrorResponse {
+                                        id: request_id,
+                                        error: RpcError {
+                                            code: ERR_INVALID_PARAMS,
+                                            message: "Invalid side".into(),
+                                        },
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&response) {
+                                        let _ = tx_for_recv.send(json);
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            let command = OrderCommand::PlaceOrder {
+                                order_id,
+                                side: side_enum,
+                                order_type: params.order_type.clone(),
+                                price: params.price,
+                                quantity: qty,
+                                user_id: Some(user_id),
+                            };
+
+                            info!("Sending order to matching engine: {:?}", command);
+                            if let Err(e) = order_sender_clone.send_order_command(&command).await {
+                                error!("Failed to send order to matching engine: {}", e);
+                                let response = ErrorResponse {
+                                    id: request_id,
+                                    error: RpcError {
+                                        code: ERR_ORDER_REJECTED,
+                                        message: "Failed to submit to matching engine".into(),
+                                    },
+                                };
+                                if let Ok(json) = serde_json::to_string(&response) {
+                                    let _ = tx_for_recv.send(json);
+                                }
+                            } else {
+                                let response = SuccessResponse {
+                                    id: request_id,
+                                    result: OrderResult {
+                                        order_id: order_id.to_string(),
+                                    },
+                                };
+                                if let Ok(json) = serde_json::to_string(&response) {
+                                    let _ = tx_for_recv.send(json);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Client {} create_order_in_accounts error: {}", client_id_clone, e);
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_ORDER_REJECTED,
+                                    message: e,
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                        }
+                    }
+                }
+
+                "private/cancel_order" => {
+                    let cm = channel_manager_clone.read().await;
+                    let user_id = cm.get_user_id(client_id_clone);
+                    drop(cm);
+
+                    if user_id.is_none() {
+                        let response = ErrorResponse {
+                            id: request_id,
+                            error: RpcError {
+                                code: ERR_UNAUTHORIZED,
+                                message: "Not authenticated".into(),
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            let _ = tx_for_recv.send(json);
+                        }
+                        continue;
+                    }
+
+                    let user_id = user_id.unwrap();
+
+                    let params: CancelOrderParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params: expected {order_id: string}".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    let order_uuid = match params.order_id.parse::<Uuid>() {
+                        Ok(id) => id,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid order ID".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
+
+                    let result = cancel_order_in_accounts(&proxy_state, &params.order_id, user_id).await;
+
+                    match result {
                         Ok(()) => {
-                            // Send cancel to matching engine
                             let command = OrderCommand::CancelOrder {
                                 order_id: order_uuid,
                                 user_id: Some(user_id),
@@ -585,42 +913,89 @@ pub async fn handle_websocket_connection(
 
                             if let Err(e) = order_sender_clone.send_order_command(&command).await {
                                 error!("Failed to send cancel to matching engine: {}", e);
-                                // Order is already cancelled in accounts, this is okay
                             }
 
-                            ServerMessage::CancelResult {
-                                success: true,
-                                order_id,
-                                error: None,
+                            let response = SuccessResponse {
+                                id: request_id,
+                                result: CancelResult {
+                                    order_id: params.order_id,
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
                             }
                         }
                         Err(e) => {
-                            ServerMessage::CancelResult {
-                                success: false,
-                                order_id,
-                                error: Some(e),
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_CANCEL_FAILED,
+                                    message: e,
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
                             }
                         }
-                    };
+                    }
+                }
 
+                "private/register_bot" => {
+                    let mut cm = channel_manager_clone.write().await;
+                    cm.register_bot(client_id_clone, tx_for_recv.clone());
+
+                    let response = SuccessResponse {
+                        id: request_id,
+                        result: "ok",
+                    };
                     if let Ok(json) = serde_json::to_string(&response) {
                         let _ = tx_for_recv.send(json);
                     }
                 }
 
-                Ok(ClientMessage::RegisterBot) => {
-                    let mut cm = channel_manager_clone.write().await;
-                    cm.register_bot(client_id_clone, tx_for_recv.clone());
-                }
+                "private/bot_status" => {
+                    let params: BotStatusParams = match serde_json::from_value(request.params) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            let response = ErrorResponse {
+                                id: request_id,
+                                error: RpcError {
+                                    code: ERR_INVALID_PARAMS,
+                                    message: "Invalid params for bot_status".into(),
+                                },
+                            };
+                            if let Ok(json) = serde_json::to_string(&response) {
+                                let _ = tx_for_recv.send(json);
+                            }
+                            continue;
+                        }
+                    };
 
-                Ok(ClientMessage::BotStatus { strategies }) => {
                     let mut cm = channel_manager_clone.write().await;
-                    cm.set_bot_status(strategies);
+                    cm.set_bot_status(params.strategies);
                     info!("Received bot status update");
+
+                    let response = SuccessResponse {
+                        id: request_id,
+                        result: "ok",
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = tx_for_recv.send(json);
+                    }
                 }
 
-                Err(e) => {
-                    warn!("Invalid client message: {} - {}", text, e);
+                _ => {
+                    warn!("Unknown method: {}", request.method);
+                    let response = ErrorResponse {
+                        id: request_id,
+                        error: RpcError {
+                            code: ERR_METHOD_NOT_FOUND,
+                            message: format!("Method not found: {}", request.method),
+                        },
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = tx_for_recv.send(json);
+                    }
                 }
             }
         }

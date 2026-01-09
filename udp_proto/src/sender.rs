@@ -5,9 +5,31 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver, Sender as ChannelSender, TrySendError};
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::error::{ProtocolError, Result};
 use crate::protocol::*;
+
+/// Create a UDP socket with SO_REUSEADDR set (allows quick restarts)
+fn create_udp_socket_with_reuse(bind_addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let domain = if bind_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+
+    // On Unix-like systems, also set SO_REUSEPORT for better behavior
+    #[cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos"))))]
+    {
+        socket.set_reuse_port(true)?;
+    }
+
+    socket.bind(&bind_addr.into())?;
+    Ok(socket.into())
+}
 
 /// Configuration for the UDP sender
 #[derive(Debug, Clone)]
@@ -87,7 +109,7 @@ pub struct UdpSender {
 impl UdpSender {
     /// Create a new sender bound to the specified local address
     pub fn new(config: SenderConfig, bind_addr: SocketAddr) -> Result<Self> {
-        let socket = UdpSocket::bind(bind_addr)?;
+        let socket = create_udp_socket_with_reuse(bind_addr)?;
         socket.set_nonblocking(false)?;
 
         let (tx, rx) = bounded(config.channel_capacity);

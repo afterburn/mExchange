@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { OrderBook, OrderBookLevel, Trade, MarketStats, Side, OrderType } from '../types';
-import { useWebSocket, type OrderEvent, type OrderResultMessage, type CancelResultMessage, type AuthResultMessage } from './useWebSocket';
+import { useWebSocket, type OrderEvent, type OrderResultMessage, type CancelResultMessage, type AuthResultMessage, type TradeTuple } from './useWebSocket';
 import { useAuthStore } from '../stores/authStore';
 
 // Re-export OrderEvent for consumers
@@ -86,7 +86,7 @@ export interface TradeWithOrderIds {
  * This keeps the main thread free for rendering.
  */
 export function useOrderBookWorker(
-  onTradeWithOrderId?: (trade: TradeWithOrderIds) => void,
+  _onTradeWithOrderId?: (trade: TradeWithOrderIds) => void,
   onOrderEvent?: (event: OrderEvent) => void
 ) {
   const [marketState, setMarketState] = useState<MarketState>(initialMarketState);
@@ -108,6 +108,11 @@ export function useOrderBookWorker(
   const flushUpdate = useCallback(() => {
     const update = pendingUpdateRef.current;
     if (!update) return;
+
+    // Debug: log when trades are in the update
+    if (update.trades && update.trades.length > 0) {
+      console.log('[flushUpdate] Received update with trades:', update.trades.length);
+    }
 
     setMarketState(prev => ({
       orderBook: update.orderBook,
@@ -180,26 +185,25 @@ export function useOrderBookWorker(
   const handleChannelNotification = useCallback((data: {
     channel_name: string;
     notification: {
-      trades: Array<{ price: number; quantity: number; side: string; timestamp: number; buy_order_id?: string; sell_order_id?: string }>;
+      trades: TradeTuple[];
       bid_changes: Array<[number, number, number]>;
       ask_changes: Array<[number, number, number]>;
       total_bid_amount: number;
       total_ask_amount: number;
       time: number;
+      stats_24h?: {
+        high_24h: number;
+        low_24h: number;
+        volume_24h: number;
+        open_24h: number;
+        last_price: number;
+      };
+      snapshot?: boolean;
     };
   }) => {
-    // Check for trades with order IDs and notify callback
-    if (onTradeWithOrderId && data.notification.trades) {
-      for (const trade of data.notification.trades) {
-        if (trade.buy_order_id || trade.sell_order_id) {
-          onTradeWithOrderId({
-            price: trade.price,
-            quantity: trade.quantity,
-            buy_order_id: trade.buy_order_id,
-            sell_order_id: trade.sell_order_id,
-          });
-        }
-      }
+    // Debug: log when trades arrive
+    if (data.notification.trades && data.notification.trades.length > 0) {
+      console.log('[useOrderBookWorker] Received trades:', data.notification.trades);
     }
 
     if (workerRef.current) {
@@ -208,7 +212,7 @@ export function useOrderBookWorker(
         data,
       } as WorkerMessage);
     }
-  }, [onTradeWithOrderId]);
+  }, []);
 
   // Handle auth result
   const handleAuthResult = useCallback((result: AuthResultMessage) => {

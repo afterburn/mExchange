@@ -8,7 +8,7 @@ import RecentTrades from './components/RecentTrades';
 import OpenOrders from './components/OpenOrders';
 import InlineOrderHistory from './components/InlineOrderHistory';
 import ErrorBoundary from './components/ErrorBoundary';
-import { useOrderBookWorker, type TradeWithOrderIds, type OrderEvent } from './hooks/useOrderBookWorker';
+import { useOrderBookWorker, type OrderEvent } from './hooks/useOrderBookWorker';
 import { useAuthStore } from './stores/authStore';
 import { useToastStore } from './stores/toastStore';
 import ToastContainer from './components/ToastContainer';
@@ -63,80 +63,21 @@ function App() {
 
   const addToast = useToastStore((state) => state.addToast);
 
-  // Track fills per order for detailed toast messages when order completes
-  const orderFillsRef = useRef<Map<string, { side: 'Buy' | 'Sell'; totalQty: number; totalValue: number; count: number }>>(new Map());
-
-  // Callback for when trades with order IDs come in via WebSocket
-  const handleTradeWithOrderId = useCallback((trade: TradeWithOrderIds) => {
-    // Check if this trade involves one of the user's open orders
-    const matchedOrderId = trade.buy_order_id && openOrderIdsRef.current.has(trade.buy_order_id)
-      ? trade.buy_order_id
-      : trade.sell_order_id && openOrderIdsRef.current.has(trade.sell_order_id)
-        ? trade.sell_order_id
-        : null;
-
-    if (matchedOrderId) {
-      const side = trade.buy_order_id === matchedOrderId ? 'Buy' : 'Sell';
-      const tradeValue = trade.quantity * trade.price;
-      const existing = orderFillsRef.current.get(matchedOrderId);
-
-      if (existing) {
-        existing.totalQty += trade.quantity;
-        existing.totalValue += tradeValue;
-        existing.count += 1;
-      } else {
-        orderFillsRef.current.set(matchedOrderId, {
-          side,
-          totalQty: trade.quantity,
-          totalValue: tradeValue,
-          count: 1,
-        });
-      }
-
-      // Update open orders state in real-time for partial fills
-      setApiOrders(prev => prev.map(order => {
-        if (order.id === matchedOrderId) {
-          const newFilledQty = parseFloat(order.filled_quantity) + trade.quantity;
-          const totalQty = parseFloat(order.quantity);
-          return {
-            ...order,
-            filled_quantity: newFilledQty.toString(),
-            status: newFilledQty >= totalQty ? 'filled' : 'partially_filled',
-          };
-        }
-        return order;
-      }));
-    }
-  }, []);
 
   // Handle order lifecycle events (order_filled, order_cancelled)
   const handleOrderEvent = useCallback((event: OrderEvent) => {
     if (event.type === 'order_filled') {
       // Check if this is one of our orders
       if (openOrderIdsRef.current.has(event.order_id)) {
-        // Get accumulated fill data for this order
-        const fillData = orderFillsRef.current.get(event.order_id);
-
         // Refresh balances and orders
         fetchOrders();
         fetchBalances();
 
-        // Show toast with fill details
-        if (fillData) {
-          const avgPrice = fillData.totalValue / fillData.totalQty;
-          addToast({
-            type: 'success',
-            title: `${fillData.side} Order Filled`,
-            message: `${fillData.totalQty.toFixed(2)} KCN @ ${avgPrice.toFixed(2)} EUR avg${fillData.count > 1 ? ` (${fillData.count} fills)` : ''}`,
-          });
-          orderFillsRef.current.delete(event.order_id);
-        } else {
-          addToast({
-            type: 'success',
-            title: 'Order Filled',
-            message: 'Your order has been completely filled',
-          });
-        }
+        addToast({
+          type: 'success',
+          title: 'Order Filled',
+          message: 'Your order has been completely filled',
+        });
       }
     } else if (event.type === 'order_cancelled') {
       // Check if this is one of our orders
@@ -144,20 +85,10 @@ function App() {
         fetchOrders();
         fetchBalances();
 
-        const fillData = orderFillsRef.current.get(event.order_id);
         const filledQty = parseFloat(event.filled_quantity) || 0;
 
-        if (filledQty > 0 && fillData && fillData.totalQty > 0) {
-          // Partial fill - show as success (common for market orders hitting liquidity limits)
-          const avgPrice = fillData.totalValue / fillData.totalQty;
-          const totalValue = fillData.totalValue;
-          addToast({
-            type: 'success',
-            title: `${fillData.side} Order Executed`,
-            message: `${fillData.side === 'Buy' ? 'Bought' : 'Sold'} ${fillData.totalQty.toFixed(2)} KCN @ ${avgPrice.toFixed(2)} EUR avg (${totalValue.toFixed(2)} EUR total). Remaining returned - insufficient liquidity.`,
-          });
-        } else if (filledQty > 0) {
-          // Partial fill but no fill tracking data
+        if (filledQty > 0) {
+          // Partial fill
           addToast({
             type: 'success',
             title: 'Order Executed (Partial)',
@@ -171,12 +102,11 @@ function App() {
             message: 'Your order has been cancelled',
           });
         }
-        orderFillsRef.current.delete(event.order_id);
       }
     }
   }, [fetchOrders, fetchBalances, addToast]);
 
-  const { orderBook, trades, stats, placeOrder, placeOrderWs, cancelOrderWs, isConnected, isWsAuthenticated } = useOrderBookWorker(handleTradeWithOrderId, handleOrderEvent);
+  const { orderBook, trades, stats, placeOrder, placeOrderWs, cancelOrderWs, isConnected, isWsAuthenticated } = useOrderBookWorker(undefined, handleOrderEvent);
 
   // Update document title with current price
   useEffect(() => {

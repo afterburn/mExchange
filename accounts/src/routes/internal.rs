@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::{EntryType, Fill, LedgerEntry, Order, OrderType, PlaceOrderRequest, Side, Trade};
+use crate::models::{EntryType, Fill, LedgerEntry, Order, OrderType, PlaceOrderRequest, Side, Trade, OHLCV};
 use crate::AppState;
 
 /// Internal API routes (called by gateway/matching engine, not end users)
@@ -134,7 +134,17 @@ async fn settle_fill(
             )
         })?;
 
-    // OHLCV updates are handled by market_data service via WebSocket
+    // Update OHLCV candles directly for reliable persistence
+    if let Err(e) = OHLCV::update_from_trade(
+        &state.pool,
+        &req.symbol,
+        req.price,
+        req.quantity,
+        req.timestamp,
+    ).await {
+        // Log error but don't fail the settlement - OHLCV is secondary
+        tracing::warn!("Failed to update OHLCV for trade: {}", e);
+    }
 
     Ok(Json(SettleFillResponse {
         trade_id: trade.id.to_string(),

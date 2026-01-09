@@ -98,6 +98,9 @@ fn main() {
 }
 
 async fn tokio_main() -> anyhow::Result<()> {
+    // Load .env file if present (for local development)
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

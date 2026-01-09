@@ -11,6 +11,7 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 flatbuffers = "24.3"
 uuid = { version = "1", features = ["v4"] }
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

@@ -19,10 +19,13 @@ const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
 });
 
 const RecentTrades = memo(function RecentTrades({ trades }: RecentTradesProps) {
+  // Debug: log trades when they change
+  console.log('[RecentTrades] Rendering with trades:', trades.length, trades.slice(0, 2));
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex justify-between text-[10px] text-white/40 px-3 py-1.5 border-b border-white/10 font-medium">
-        <span className="w-16">Price</span>
+        <span className="w-16">Price ({trades.length})</span>
         <span className="w-14 text-right">Qty</span>
         <span className="w-14 text-right">Time</span>
       </div>

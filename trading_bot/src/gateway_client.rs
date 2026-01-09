@@ -1,46 +1,56 @@
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::types::{GatewayMessage, MarketState, OpenOrder, OrderRequest, ChannelNotification, TaggedMessage, Side};
+use crate::types::{GatewayMessage, MarketState, OpenOrder, OrderRequest, ChannelNotification, TaggedMessage, Side, TickerNotification, LwtNotification};
 
-/// WebSocket message to send to gateway
-#[derive(Debug, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum WsOutMessage {
-    Auth { token: String },
-    Subscribe { channel: String },
-    PlaceOrder {
-        symbol: String,
-        side: String,
-        order_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        price: Option<rust_decimal::Decimal>,
-        quantity: rust_decimal::Decimal,
-    },
-    CancelOrder { order_id: String },
+/// Request ID counter for JSON-RPC style requests
+static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn get_next_request_id() -> String {
+    REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst).to_string()
 }
 
-/// Response messages from gateway
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ServerResponse {
-    OrderResult {
-        success: bool,
-        order_id: Option<String>,
-        error: Option<String>,
-    },
-    CancelResult {
-        success: bool,
-        order_id: String,
-        error: Option<String>,
-    },
-    #[serde(other)]
-    Other,
+/// JSON-RPC style WebSocket request
+#[derive(Debug, serde::Serialize)]
+struct WsRequest<P: serde::Serialize> {
+    id: String,
+    method: String,
+    params: P,
+}
+
+/// Auth parameters
+#[derive(Debug, serde::Serialize)]
+struct AuthParams {
+    token: String,
+}
+
+/// Subscribe parameters
+#[derive(Debug, serde::Serialize)]
+struct SubscribeParams {
+    channels: Vec<String>,
+}
+
+/// Place order parameters
+#[derive(Debug, serde::Serialize)]
+struct PlaceOrderParams {
+    symbol: String,
+    side: String,
+    order_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    price: Option<rust_decimal::Decimal>,
+    quantity: rust_decimal::Decimal,
+}
+
+/// Cancel order parameters
+#[derive(Debug, serde::Serialize)]
+struct CancelOrderParams {
+    order_id: String,
 }
 
 /// Auth response from accounts service
@@ -272,8 +282,12 @@ impl GatewayClient {
     async fn authenticate_websocket(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let token = self.access_token.read().await;
         if let Some(token) = token.as_ref() {
-            let msg = WsOutMessage::Auth { token: token.clone() };
-            let json = serde_json::to_string(&msg)?;
+            let request = WsRequest {
+                id: get_next_request_id(),
+                method: "public/auth".to_string(),
+                params: AuthParams { token: token.clone() },
+            };
+            let json = serde_json::to_string(&request)?;
 
             let sender = self.ws_sender.read().await;
             if let Some(tx) = sender.as_ref() {
@@ -289,10 +303,14 @@ impl GatewayClient {
     }
 
     async fn subscribe(&self, channel: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let msg = WsOutMessage::Subscribe {
-            channel: channel.to_string(),
+        let request = WsRequest {
+            id: get_next_request_id(),
+            method: "public/subscribe".to_string(),
+            params: SubscribeParams {
+                channels: vec![channel.to_string()],
+            },
         };
-        let json = serde_json::to_string(&msg)?;
+        let json = serde_json::to_string(&request)?;
 
         let sender = self.ws_sender.read().await;
         if let Some(tx) = sender.as_ref() {
@@ -311,8 +329,20 @@ impl GatewayClient {
         let msg: GatewayMessage = serde_json::from_str(text)?;
 
         match msg {
+            GatewayMessage::RpcResponse(resp) => {
+                debug!("RPC response for request {}: {:?}", resp.id, resp.result);
+            }
+            GatewayMessage::RpcError(err) => {
+                warn!("RPC error for request {}: {} (code {})", err.id, err.error.message, err.error.code);
+            }
             GatewayMessage::ChannelNotification(notif) => {
                 Self::handle_channel_notification(notif, market_state).await;
+            }
+            GatewayMessage::TickerNotification(notif) => {
+                Self::handle_ticker_notification(notif, market_state).await;
+            }
+            GatewayMessage::LwtNotification(notif) => {
+                Self::handle_lwt_notification(notif, market_state).await;
             }
             GatewayMessage::Tagged(tagged) => {
                 Self::handle_tagged_message(tagged, market_state, open_orders, inventory).await;
@@ -364,6 +394,56 @@ impl GatewayClient {
         debug!(
             "Channel notification: bid={:?}, ask={:?}",
             state.best_bid, state.best_ask
+        );
+    }
+
+    async fn handle_ticker_notification(
+        notif: TickerNotification,
+        market_state: &Arc<RwLock<MarketState>>,
+    ) {
+        let data = notif.notification;
+        let mut state = market_state.write().await;
+
+        // Update state from ticker data
+        if data.best_bid_price > 0.0 {
+            state.best_bid = Some(rust_decimal::Decimal::from_f64_retain(data.best_bid_price).unwrap_or_default());
+        }
+        if data.best_ask_price > 0.0 {
+            state.best_ask = Some(rust_decimal::Decimal::from_f64_retain(data.best_ask_price).unwrap_or_default());
+        }
+        if data.last_price > 0.0 {
+            let price = rust_decimal::Decimal::from_f64_retain(data.last_price).unwrap_or_default();
+            state.update_price(price);
+        }
+
+        debug!(
+            "Ticker notification: bid={:?}, ask={:?}, last={:?}",
+            state.best_bid, state.best_ask, data.last_price
+        );
+    }
+
+    async fn handle_lwt_notification(
+        notif: LwtNotification,
+        market_state: &Arc<RwLock<MarketState>>,
+    ) {
+        let data = notif.notification;
+        let mut state = market_state.write().await;
+
+        // LWT format: b = (bid_price, bid_amount, bid_total), a = (ask_price, ask_amount, ask_total)
+        if data.b.0 > 0.0 {
+            state.best_bid = Some(rust_decimal::Decimal::from_f64_retain(data.b.0).unwrap_or_default());
+        }
+        if data.a.0 > 0.0 {
+            state.best_ask = Some(rust_decimal::Decimal::from_f64_retain(data.a.0).unwrap_or_default());
+        }
+        if data.l > 0.0 {
+            let price = rust_decimal::Decimal::from_f64_retain(data.l).unwrap_or_default();
+            state.update_price(price);
+        }
+
+        debug!(
+            "LWT notification: bid={:?}, ask={:?}, last={}",
+            state.best_bid, state.best_ask, data.l
         );
     }
 
@@ -438,21 +518,25 @@ impl GatewayClient {
         &self,
         order: &OrderRequest,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let msg = WsOutMessage::PlaceOrder {
-            symbol: order.symbol.clone(),
-            side: match order.side {
-                crate::types::Side::Bid => "bid".to_string(),
-                crate::types::Side::Ask => "ask".to_string(),
+        let request = WsRequest {
+            id: get_next_request_id(),
+            method: "private/place_order".to_string(),
+            params: PlaceOrderParams {
+                symbol: order.symbol.clone(),
+                side: match order.side {
+                    crate::types::Side::Bid => "bid".to_string(),
+                    crate::types::Side::Ask => "ask".to_string(),
+                },
+                order_type: match order.order_type {
+                    crate::types::OrderType::Limit => "limit".to_string(),
+                    crate::types::OrderType::Market => "market".to_string(),
+                },
+                price: order.price,
+                quantity: order.quantity,
             },
-            order_type: match order.order_type {
-                crate::types::OrderType::Limit => "limit".to_string(),
-                crate::types::OrderType::Market => "market".to_string(),
-            },
-            price: order.price,
-            quantity: order.quantity,
         };
 
-        let json = serde_json::to_string(&msg)?;
+        let json = serde_json::to_string(&request)?;
 
         let sender = self.ws_sender.read().await;
         if let Some(tx) = sender.as_ref() {
@@ -482,11 +566,15 @@ impl GatewayClient {
         &self,
         order_id: Uuid,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let msg = WsOutMessage::CancelOrder {
-            order_id: order_id.to_string(),
+        let request = WsRequest {
+            id: get_next_request_id(),
+            method: "private/cancel_order".to_string(),
+            params: CancelOrderParams {
+                order_id: order_id.to_string(),
+            },
         };
 
-        let json = serde_json::to_string(&msg)?;
+        let json = serde_json::to_string(&request)?;
 
         let sender = self.ws_sender.read().await;
         if let Some(tx) = sender.as_ref() {

@@ -7,9 +7,31 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver as ChannelReceiver, Sender as ChannelSender};
 use parking_lot::Mutex;
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::error::{ProtocolError, Result};
 use crate::protocol::*;
+
+/// Create a UDP socket with SO_REUSEADDR set (allows quick restarts)
+fn create_udp_socket_with_reuse(bind_addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let domain = if bind_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+
+    // On Unix-like systems, also set SO_REUSEPORT for better behavior
+    #[cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos"))))]
+    {
+        socket.set_reuse_port(true)?;
+    }
+
+    socket.bind(&bind_addr.into())?;
+    Ok(socket.into())
+}
 
 /// Configuration for the UDP receiver
 #[derive(Debug, Clone)]
@@ -121,7 +143,7 @@ pub struct UdpReceiver {
 impl UdpReceiver {
     /// Create a new receiver bound to the specified address
     pub fn new(config: ReceiverConfig, bind_addr: SocketAddr) -> Result<Self> {
-        let socket = UdpSocket::bind(bind_addr)?;
+        let socket = create_udp_socket_with_reuse(bind_addr)?;
         socket.set_read_timeout(Some(config.recv_timeout))?;
 
         let (tx, rx) = bounded(config.channel_capacity);

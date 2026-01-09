@@ -27,10 +27,17 @@ export interface ChannelNotification {
     total_bid_amount: number;
     total_ask_amount: number;
     time: number;
+    snapshot?: boolean;
   };
 }
 
 type MessageHandler = (data: unknown) => void;
+
+// Request ID counter for JSON-RPC style requests
+let requestIdCounter = 0;
+function getNextRequestId(): string {
+  return String(++requestIdCounter);
+}
 
 export class TestClient {
   private ws: WebSocket | null = null;
@@ -163,8 +170,9 @@ export class TestClient {
       this.addMessageHandler(handler);
 
       this.ws.send(JSON.stringify({
-        action: 'subscribe',
-        channel: `book.${this.symbol}.none.10.100ms`,
+        id: getNextRequestId(),
+        method: 'public/subscribe',
+        params: { channels: [`book.${this.symbol}.none.10.100ms`] },
       }));
     });
   }
