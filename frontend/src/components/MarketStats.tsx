@@ -6,6 +6,19 @@ interface MarketStatsProps {
   stats: MarketStatsType;
 }
 
+function formatVolume(volume: number): string {
+  if (volume >= 1_000_000_000) {
+    return (volume / 1_000_000_000).toFixed(2) + 'B';
+  }
+  if (volume >= 1_000_000) {
+    return (volume / 1_000_000).toFixed(2) + 'M';
+  }
+  if (volume >= 1_000) {
+    return (volume / 1_000).toFixed(2) + 'K';
+  }
+  return volume.toFixed(2);
+}
+
 const MarketStats = memo(function MarketStats({ stats }: MarketStatsProps) {
   const isPositive = stats.priceChange24h >= 0;
 
@@ -36,7 +49,7 @@ const MarketStats = memo(function MarketStats({ stats }: MarketStatsProps) {
           </div>
           <div className="flex gap-1">
             <span className="text-white/40">Vol</span>
-            <span className="text-white/70">{stats.volume24h.toFixed(2)}</span>
+            <span className="text-white/70">{formatVolume(stats.volume24h)}</span>
           </div>
         </div>
       </div>

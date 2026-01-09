@@ -74,8 +74,8 @@ pub struct GatewayClient {
 impl GatewayClient {
     pub fn new(gateway_host: &str, gateway_port: u16) -> Self {
         let ws_url = format!("ws://{}:{}/ws", gateway_host, gateway_port);
-        // Accounts service is typically on port 3001
-        let accounts_url = format!("http://{}:3001", gateway_host);
+        // Use gateway as proxy for accounts API (gateway proxies /auth/* to accounts)
+        let accounts_url = format!("http://{}:{}", gateway_host, gateway_port);
 
         Self {
             accounts_url,

@@ -267,6 +267,8 @@ const DepthChart = memo(function DepthChart({ bids, asks }: DepthChartProps) {
         <span className="text-green-500">Bid: €{formatPrice(bestBid)}</span>
         <span className="text-white/40">|</span>
         <span className="text-red-500">Ask: €{formatPrice(bestAsk)}</span>
+        <span className="text-white/40">|</span>
+        <span className="text-white/40">Depth: {formatVolume(maxVolume)}</span>
       </div>
 
       <div className="flex-1 relative min-h-0">
