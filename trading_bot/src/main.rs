@@ -94,9 +94,9 @@ async fn main() -> Result<(), BoxError> {
         return Err(e);
     }
 
-    // Fund the seeder (effectively unlimited)
-    let _ = seeder_client.deposit("EUR", "10000000000").await;
-    let _ = seeder_client.mint("KCN", "10000000000").await;
+    // Fund the seeder with enough for initial orderbook (not unlimited)
+    let _ = seeder_client.deposit("EUR", "1000000").await;  // 1M EUR
+    let _ = seeder_client.mint("KCN", "1000").await;        // 1K KCN
 
     // Connect seeder to WebSocket for market data
     if let Err(e) = seeder_client.connect_websocket_with_state(Arc::clone(&shared_market_state)).await {
@@ -163,11 +163,12 @@ async fn run_strategy_with_own_account(
     info!("[{}] Logging in as {}", strategy_name, bot.email);
     client.login(&bot.email).await?;
 
-    // Fund this bot's account (effectively unlimited)
-    if let Err(e) = client.deposit("EUR", "10000000000").await {
+    // Fund this bot's account with realistic constraints
+    // ~100K EUR and ~10 KCN creates natural inventory pressure
+    if let Err(e) = client.deposit("EUR", "100000").await {
         warn!("[{}] EUR deposit: {}", strategy_name, e);
     }
-    if let Err(e) = client.mint("KCN", "10000000000").await {
+    if let Err(e) = client.mint("KCN", "10").await {
         warn!("[{}] KCN mint: {}", strategy_name, e);
     }
 
