@@ -99,10 +99,26 @@ jobs:
       - name: Deploy to EC2
         run: |
           # Stop services before deploying
-          ssh ec2 "sudo systemctl stop mexchange-trading-bot mexchange-gateway mexchange-matching-engine mexchange-accounts mexchange-market-data 2>/dev/null || true"
+          ssh ec2 << 'STOPEOF'
+          sudo systemctl stop mexchange-trading-bot mexchange-gateway mexchange-matching-engine mexchange-accounts mexchange-market-data 2>/dev/null || true
+
+          # Wait for services to fully stop and release file handles
+          sleep 3
+
+          # Kill any remaining processes using the binaries (in case systemd didn't clean up)
+          for bin in gateway trading_bot matching_engine_service accounts market_data; do
+            sudo pkill -9 -f "/opt/mexchange/bin/$bin" 2>/dev/null || true
+          done
+
+          # Wait a moment for processes to terminate
+          sleep 2
+          STOPEOF
 
           # Create directories on EC2
           ssh ec2 "sudo mkdir -p ${{ env.DEPLOY_PATH }}/{bin,frontend} && sudo chown -R \$USER:\$USER ${{ env.DEPLOY_PATH }}"
+
+          # Remove old binaries to ensure clean deployment
+          ssh ec2 "rm -f ${{ env.DEPLOY_PATH }}/bin/*"
 
           # Copy binaries
           scp artifacts/bin/* ec2:${{ env.DEPLOY_PATH }}/bin/
