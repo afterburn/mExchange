@@ -169,7 +169,6 @@ let trades: Array<{
 }> = [];
 let priceHistory: { price: number; time: number }[] = [];
 let lastPrice = 0;
-let hasReceivedSnapshot = false;
 
 // 24h stats from gateway
 let high24h = 0;
@@ -276,7 +275,6 @@ function processChannelNotification(data: ChannelNotification): void {
   if (notification.snapshot) {
     bids.clear();
     asks.clear();
-    hasReceivedSnapshot = true;
   }
 
   // Apply bid changes
@@ -370,7 +368,6 @@ function reset(): void {
   bids.clear();
   asks.clear();
   trades = [];
-  hasReceivedSnapshot = false;
 }
 
 function getMarketStateUpdate(): MarketStateUpdate {
