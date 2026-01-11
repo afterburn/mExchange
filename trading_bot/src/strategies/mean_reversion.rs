@@ -6,8 +6,8 @@ use super::{Strategy, StrategyContext};
 use crate::indicators::z_score;
 use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 
-/// Maximum position
-const MAX_POSITION: Decimal = dec!(200);
+/// Maximum position (smaller = less inventory depletion)
+const MAX_POSITION: Decimal = dec!(25);
 
 /// Mean reversion - only trades on extreme moves, provides counter-trend pressure
 /// Slower and less aggressive to allow trends to develop
@@ -72,8 +72,8 @@ impl Strategy for MeanReversion {
             return actions;
         };
 
-        // Moderate size
-        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(5u32..20u32)));
+        // Smaller size to preserve inventory
+        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(1u32..5u32)));
 
         // Use market orders to fade extremes
         actions.orders_to_place.push(OrderRequest {

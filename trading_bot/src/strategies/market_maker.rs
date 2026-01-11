@@ -7,11 +7,11 @@ use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 /// Number of price levels on each side (bid/ask)
 const NUM_LEVELS: usize = 3;
 /// Base spread in basis points (tighter = more fills)
-const BASE_SPREAD_BPS: Decimal = dec!(5);
+const BASE_SPREAD_BPS: Decimal = dec!(8);
 /// Maximum inventory before stopping quotes on one side
-const MAX_INVENTORY: Decimal = dec!(200);
-/// Base order size (smaller for more activity)
-const BASE_ORDER_SIZE: Decimal = dec!(5);
+const MAX_INVENTORY: Decimal = dec!(30);
+/// Base order size (smaller = inventory lasts longer)
+const BASE_ORDER_SIZE: Decimal = dec!(1);
 
 /// Market maker - provides liquidity but follows the market
 pub struct MarketMaker;

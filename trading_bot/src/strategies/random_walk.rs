@@ -5,10 +5,14 @@ use rust_decimal_macros::dec;
 use super::{Strategy, StrategyContext};
 use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 
+/// Maximum inventory before stopping quotes on one side
+const MAX_INVENTORY: Decimal = dec!(30);
+
 /// Enhanced random walk strategy with realistic market dynamics:
 /// - Momentum: trends tend to continue
 /// - Volatility clustering: volatile periods cluster together
 /// - Mean reversion: price gravitates toward a slowly-drifting fair value
+/// - Inventory awareness: only quotes sides it can fulfill
 pub struct RandomWalk {
     /// Current walk price (moves with momentum and mean reversion)
     walk_price: Option<Decimal>,
@@ -145,11 +149,16 @@ impl Strategy for RandomWalk {
         let bid_price = Self::round_price(new_price - half_spread);
         let ask_price = Self::round_price(new_price + half_spread);
 
-        // Random quantity
-        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(5u32..20u32)));
+        // Inventory-aware order sizing (smaller orders = longer-lasting inventory)
+        let base_qty = rng.gen_range(1u32..5u32);
+        let quantity = Self::round_quantity(Decimal::from(base_qty));
 
-        // Place bid order
-        if bid_price > Decimal::ZERO {
+        // Check inventory limits before placing orders
+        let can_buy = ctx.inventory < MAX_INVENTORY;
+        let can_sell = ctx.inventory > -MAX_INVENTORY;
+
+        // Place bid order only if we have room to buy
+        if bid_price > Decimal::ZERO && can_buy {
             actions.orders_to_place.push(OrderRequest {
                 symbol: ctx.symbol.to_string(),
                 side: Side::Bid,
@@ -159,31 +168,41 @@ impl Strategy for RandomWalk {
             });
         }
 
-        // Place ask order
-        actions.orders_to_place.push(OrderRequest {
-            symbol: ctx.symbol.to_string(),
-            side: Side::Ask,
-            order_type: OrderType::Limit,
-            price: Some(ask_price),
-            quantity,
-        });
+        // Place ask order only if we have inventory to sell
+        if can_sell {
+            actions.orders_to_place.push(OrderRequest {
+                symbol: ctx.symbol.to_string(),
+                side: Side::Ask,
+                order_type: OrderType::Limit,
+                price: Some(ask_price),
+                quantity,
+            });
+        }
 
-        // Market orders follow momentum (more likely to buy in uptrend)
-        if rng.gen_range(0..100) < 20 {
+        // Market orders follow momentum but respect inventory
+        if rng.gen_range(0..100) < 15 {
             let market_side = if direction > 0 {
                 if rng.gen_bool(0.6) { Side::Bid } else { Side::Ask }
             } else {
                 if rng.gen_bool(0.6) { Side::Ask } else { Side::Bid }
             };
-            let market_qty = Self::round_quantity(Decimal::from(rng.gen_range(1u32..5u32)));
 
-            actions.orders_to_place.push(OrderRequest {
-                symbol: ctx.symbol.to_string(),
-                side: market_side,
-                order_type: OrderType::Market,
-                price: None,
-                quantity: market_qty,
-            });
+            // Only place market order if inventory allows
+            let can_place = match market_side {
+                Side::Bid => can_buy,
+                Side::Ask => can_sell,
+            };
+
+            if can_place {
+                let market_qty = Self::round_quantity(Decimal::from(rng.gen_range(1u32..3u32)));
+                actions.orders_to_place.push(OrderRequest {
+                    symbol: ctx.symbol.to_string(),
+                    side: market_side,
+                    order_type: OrderType::Market,
+                    price: None,
+                    quantity: market_qty,
+                });
+            }
         }
 
         actions

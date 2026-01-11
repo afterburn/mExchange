@@ -149,6 +149,7 @@ jobs:
           ENVIRONMENT=production
           RUST_LOG=info
           ENABLE_BOT_LOGIN=true
+          ENABLE_DB_CLEANUP=${{ vars.ENABLE_DB_CLEANUP || 'false' }}
           MAIL_PROVIDER=${{ vars.MAIL_PROVIDER }}
           SMTP_HOST=${{ secrets.SMTP_HOST }}
           SMTP_PORT=${{ vars.SMTP_PORT }}

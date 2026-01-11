@@ -5,8 +5,8 @@ use rust_decimal_macros::dec;
 use super::{Strategy, StrategyContext};
 use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 
-/// Maximum position
-const MAX_POSITION: Decimal = dec!(500);
+/// Maximum position (smaller = less inventory depletion)
+const MAX_POSITION: Decimal = dec!(20);
 
 /// Aggressive trend-following trader that creates directional pressure
 /// This is the main driver of price movement - uses market orders to push price
@@ -83,8 +83,8 @@ impl Strategy for Aggressive {
         };
 
         // Aggressive market orders to move price
-        // Size varies to create natural-looking volume
-        let base_size = rng.gen_range(1..15) as u32;
+        // Smaller size to preserve liquidity and inventory
+        let base_size = rng.gen_range(1..4) as u32;
         let quantity = Self::round_quantity(Decimal::from(base_size));
 
         // 100% market orders - this strategy is pure aggression

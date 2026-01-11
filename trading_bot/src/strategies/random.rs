@@ -5,10 +5,10 @@ use rust_decimal_macros::dec;
 use super::{Strategy, StrategyContext};
 use crate::types::{OrderRequest, OrderType, Side, StrategyActions};
 
-/// Maximum position
-const MAX_POSITION: Decimal = dec!(300);
+/// Maximum position (smaller = less inventory depletion)
+const MAX_POSITION: Decimal = dec!(25);
 /// Maximum open orders for this strategy
-const MAX_OPEN_ORDERS: usize = 5;
+const MAX_OPEN_ORDERS: usize = 3;
 
 /// Noise trader - random activity that adds volume and unpredictability
 /// Mixes market orders (immediate execution) with limit orders (resting)
@@ -69,8 +69,8 @@ impl Strategy for Random {
             if can_sell { Side::Ask } else if can_buy { Side::Bid } else { return actions; }
         };
 
-        // Small retail-sized orders
-        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(1u32..10u32)));
+        // Small retail-sized orders (reduced for inventory preservation)
+        let quantity = Self::round_quantity(Decimal::from(rng.gen_range(1u32..3u32)));
 
         // 50% market orders, 50% limit orders
         let is_market = rng.gen_range(0..100) < 50;

@@ -3,12 +3,14 @@ mod aggressive;
 mod random;
 mod mean_reversion;
 mod random_walk;
+mod liquidity_provider;
 
 pub use market_maker::MarketMaker;
 pub use aggressive::Aggressive;
 pub use random::Random;
 pub use mean_reversion::MeanReversion;
 pub use random_walk::RandomWalk;
+pub use liquidity_provider::LiquidityProvider;
 
 use crate::types::{MarketState, OrderRequest, StrategyActions};
 use rust_decimal::Decimal;
@@ -51,6 +53,7 @@ pub enum StrategyType {
     Random,
     MeanReversion,
     RandomWalk,
+    LiquidityProvider,
 }
 
 impl StrategyType {
@@ -61,6 +64,7 @@ impl StrategyType {
             StrategyType::Random => Box::new(Random::new()),
             StrategyType::MeanReversion => Box::new(MeanReversion::new()),
             StrategyType::RandomWalk => Box::new(RandomWalk::new()),
+            StrategyType::LiquidityProvider => Box::new(LiquidityProvider::new()),
         }
     }
 
@@ -71,6 +75,7 @@ impl StrategyType {
             StrategyType::Random => "Random",
             StrategyType::MeanReversion => "MeanReversion",
             StrategyType::RandomWalk => "RandomWalk",
+            StrategyType::LiquidityProvider => "LiquidityProvider",
         }
     }
 }

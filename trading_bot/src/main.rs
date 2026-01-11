@@ -61,6 +61,7 @@ async fn main() -> Result<(), BoxError> {
 
     let strategies: Vec<StrategyType> = if args.all {
         vec![
+            StrategyType::LiquidityProvider, // Always first - ensures stable orderbook
             StrategyType::MarketMaker,
             StrategyType::Aggressive,
             StrategyType::Random,
@@ -94,11 +95,12 @@ async fn main() -> Result<(), BoxError> {
         return Err(e);
     }
 
-    // Fund the seeder with enough for initial orderbook (not unlimited)
+    // Fund the seeder with balanced inventory for two-sided market
+    // At ~10000 EUR/KCN: 1M EUR can buy 100 KCN, so we need 100 KCN to sell
     if let Err(e) = seeder_client.deposit("EUR", "1000000").await {
         error!("Failed to deposit EUR for seeder: {}", e);
     }
-    if let Err(e) = seeder_client.mint("KCN", "1000").await {
+    if let Err(e) = seeder_client.mint("KCN", "100").await {
         error!("Failed to mint KCN for seeder: {}", e);
     }
 
@@ -167,12 +169,17 @@ async fn run_strategy_with_own_account(
     info!("[{}] Logging in as {}", strategy_name, bot.email);
     client.login(&bot.email).await?;
 
-    // Fund this bot's account with realistic constraints
-    // ~100K EUR and ~10 KCN creates natural inventory pressure
-    if let Err(e) = client.deposit("EUR", "100000").await {
+    // Fund based on strategy type
+    // LiquidityProvider gets much larger funding as it's the "designated market maker"
+    let (eur_amount, kcn_amount) = match bot.strategy_type {
+        StrategyType::LiquidityProvider => ("10000000", "1000"), // 10M EUR, 1000 KCN
+        _ => ("500000", "50"), // 500K EUR, 50 KCN for other strategies
+    };
+
+    if let Err(e) = client.deposit("EUR", eur_amount).await {
         warn!("[{}] EUR deposit: {}", strategy_name, e);
     }
-    if let Err(e) = client.mint("KCN", "10").await {
+    if let Err(e) = client.mint("KCN", kcn_amount).await {
         warn!("[{}] KCN mint: {}", strategy_name, e);
     }
 
@@ -251,7 +258,7 @@ async fn seed_orderbook(client: &GatewayClient, symbol: &str) {
     // Initial price around 10,000
     let base_price = dec!(10000);
 
-    // Place 5 bid orders below the base price
+    // Place 5 bid orders below the base price (smaller size for inventory preservation)
     for i in 1..=5 {
         let price = base_price - rust_decimal::Decimal::from(i * 10);
         let order = OrderRequest {
@@ -259,7 +266,7 @@ async fn seed_orderbook(client: &GatewayClient, symbol: &str) {
             side: Side::Bid,
             order_type: OrderType::Limit,
             price: Some(price),
-            quantity: dec!(100),
+            quantity: dec!(5), // Smaller orders
         };
         if let Err(e) = client.submit_order(&order).await {
             warn!("Failed to seed bid order: {}", e);
@@ -274,7 +281,7 @@ async fn seed_orderbook(client: &GatewayClient, symbol: &str) {
             side: Side::Ask,
             order_type: OrderType::Limit,
             price: Some(price),
-            quantity: dec!(100),
+            quantity: dec!(5), // Smaller orders
         };
         if let Err(e) = client.submit_order(&order).await {
             warn!("Failed to seed ask order: {}", e);
