@@ -14,7 +14,7 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "rust_decimal"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "rust_decimal", "tls-rustls"] }
 
 # Auth
 jsonwebtoken = "9"
