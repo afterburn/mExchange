@@ -132,11 +132,22 @@ jobs:
       - name: Create systemd services
         run: |
           ssh ec2 << 'EOF'
+          # Configure journald to limit log size (prevent disk from filling up)
+          sudo mkdir -p /etc/systemd/journald.conf.d
+          sudo tee /etc/systemd/journald.conf.d/mexchange.conf > /dev/null << JOURNALD
+          [Journal]
+          SystemMaxUse=500M
+          SystemMaxFileSize=50M
+          MaxRetentionSec=7day
+          JOURNALD
+          sudo systemctl restart systemd-journald
+
           # Create environment file
           sudo tee /etc/mexchange.env > /dev/null << ENVFILE
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           ENVIRONMENT=production
+          RUST_LOG=info
           ENABLE_BOT_LOGIN=true
           MAIL_PROVIDER=${{ vars.MAIL_PROVIDER }}
           SMTP_HOST=${{ secrets.SMTP_HOST }}
@@ -247,7 +258,31 @@ jobs:
           WantedBy=multi-user.target
           SERVICE
 
+          # Log cleanup service (runs daily)
+          sudo tee /etc/systemd/system/mexchange-log-cleanup.service > /dev/null << SERVICE
+          [Unit]
+          Description=Mexchange Log Cleanup
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'journalctl --vacuum-size=500M && find /var/log -type f -name "*.gz" -mtime +7 -delete && find /var/log -type f -name "*.1" -delete'
+          SERVICE
+
+          # Timer to run cleanup daily at 3am
+          sudo tee /etc/systemd/system/mexchange-log-cleanup.timer > /dev/null << TIMER
+          [Unit]
+          Description=Daily log cleanup for Mexchange
+
+          [Timer]
+          OnCalendar=*-*-* 03:00:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+          TIMER
+
           sudo systemctl daemon-reload
+          sudo systemctl enable --now mexchange-log-cleanup.timer
           EOF
 
       - name: Restart services

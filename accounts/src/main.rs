@@ -40,12 +40,11 @@ async fn main() -> anyhow::Result<()> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Initialize tracing
+    // Initialize tracing - use info level in production, debug only if RUST_LOG is set
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("accounts=debug".parse()?)
-                .add_directive("tower_http=debug".parse()?),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "accounts=info,tower_http=warn".into()),
         )
         .init();
 
