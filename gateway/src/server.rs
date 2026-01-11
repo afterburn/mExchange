@@ -130,6 +130,8 @@ impl GatewayServer {
             .route("/api/orders", any(proxy_accounts))
             .route("/api/orders/*path", any(proxy_accounts))
             .route("/api/faucet/*path", any(proxy_accounts))
+            // Internal routes for bot funding (mint tokens)
+            .route("/internal/*path", any(proxy_accounts))
             .with_state(self.proxy_state.clone());
 
         // OHLCV routes - proxy to accounts service (where OHLCV data is stored)

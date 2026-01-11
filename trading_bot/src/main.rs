@@ -95,8 +95,12 @@ async fn main() -> Result<(), BoxError> {
     }
 
     // Fund the seeder with enough for initial orderbook (not unlimited)
-    let _ = seeder_client.deposit("EUR", "1000000").await;  // 1M EUR
-    let _ = seeder_client.mint("KCN", "1000").await;        // 1K KCN
+    if let Err(e) = seeder_client.deposit("EUR", "1000000").await {
+        error!("Failed to deposit EUR for seeder: {}", e);
+    }
+    if let Err(e) = seeder_client.mint("KCN", "1000").await {
+        error!("Failed to mint KCN for seeder: {}", e);
+    }
 
     // Connect seeder to WebSocket for market data
     if let Err(e) = seeder_client.connect_websocket_with_state(Arc::clone(&shared_market_state)).await {
