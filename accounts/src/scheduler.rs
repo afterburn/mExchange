@@ -5,8 +5,8 @@ use chrono::Utc;
 /// How often to run cleanup (6 hours)
 const CLEANUP_INTERVAL_HOURS: u64 = 6;
 
-/// How many days of data to keep
-const RETENTION_DAYS: i64 = 7;
+/// How many days of data to keep (1 day keeps ~2.4GB, very safe for 20GB limit)
+const RETENTION_DAYS: i64 = 1;
 
 /// Spawns a background task that periodically cleans up old database records.
 /// Controlled by ENABLE_DB_CLEANUP env var (disabled by default).
